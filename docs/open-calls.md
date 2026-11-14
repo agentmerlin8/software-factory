@@ -1,7 +1,7 @@
-# Open calls — status (updated 2026-11-14)
+# Open calls — ALL CLOSED (Randy, 2026-11-14)
 
-**6 of 7 closed by Randy 2026-11-14.** OC-3 (branching) stays open — Randy
-has other ideas; discussion in progress.
+All seven calls ratified 2026-11-14. This file is the decision record;
+the vision's locked-decisions table carries the same facts.
 
 ## OC-1 — Relationship to the old public repo — CLOSED
 
@@ -18,19 +18,36 @@ sessions first: the CLI triggers a workflow that runs an agent in a
 container with repo-scoped credentials. The adapter seam keeps other cloud
 runtimes swappable later. Board drag → dispatch lives in the same place.
 
-## OC-3 — Branch/integration strategy — OPEN (in discussion)
+## OC-3 — Branch/integration strategy — CLOSED
 
-Randy has other ideas (2026-11-14) — talking it through before deciding.
-The tentative sketch from his notes: stories → feature branch → validate →
-main. Merlin's earlier recommendation (story PRs into a feature branch,
-feature validation, then PR to main, human gates at both levels) is on the
-table but NOT ratified. Constraints any answer must satisfy:
+**Decision (Randy, 2026-11-14): trunk-based — Option 1.** Every story merges
+straight to main; feature branches are NOT used. Chosen explicitly for
+least agent friction:
 
-- main always deployable (the demo promises a deployable artifact)
-- feature-level validation has a real integration surface
-- story slices stay independently mergeable (slice-sizing law)
-- human merge gate maps cleanly onto whatever levels exist
-- expand-first ordering for dependency chains; reverts stay tractable
+- One canonical base: every dispatch branches from origin/main at a pinned
+  SHA; no feature-branch base resolution, no drift sync.
+- Conflicts stay small and early (slice law: one structural signal,
+  expand-first, independently mergeable); no big-bang feature merge — the
+  event agents handle worst.
+- One delivery milestone: MERGED = merged to main. Ledger states, board
+  Stage, provenance, review records keep their proven shape; one human
+  merge gate per story.
+- Squash merges, one commit per story on main: clean evidence pinning and
+  single-commit reverts.
+
+The isolation a feature branch would have provided is replaced by gates:
+
+1. **Feature-acceptance gate** — a feature is not "released" until ALL its
+   stories are merged AND feature-level validation passes (acceptance
+   tests / staging deploy / integrated UI approval). Validation gate, not
+   branching gate.
+2. **Expand-only or flagged** for user-visible incomplete flows — the
+   discipline that keeps main always deployable.
+
+All constraints satisfied: main always deployable (gates + flags), real
+feature-validation surface (acceptance gate), slices independently
+mergeable (trunk is the shape the slice law was written for), one human
+merge gate per story, expand-first ordering, single-commit reverts.
 
 ## OC-4 — Autonomy levels: operating rules — CLOSED
 

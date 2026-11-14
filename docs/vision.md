@@ -1,8 +1,8 @@
 # Software Factory — Vision (consolidated 2026-11-14)
 
-Status: 6 of 7 open calls ratified by Randy 2026-11-14 (see
-[open-calls.md](open-calls.md)); OC-3 (branching) in discussion. Vision
-grill still pending before build starts.
+Status: ALL 7 open calls ratified by Randy 2026-11-14 (see
+[open-calls.md](open-calls.md)). Vision grill still pending before build
+starts.
 
 ## 1. Goal
 
@@ -158,10 +158,20 @@ Code (TDD) → build + story tests green → code review (fresh context,
   ▼
 PR (review BEFORE the PR where possible) → human merge gate
   ▼
-Feature branch integration → feature validation → main   (tentative, OC-3)
+main — trunk-based, squash, one commit per story   (RATIFIED OC-3)
+  ▼
+Feature-acceptance gate: all feature stories merged + feature-level
+validation (acceptance tests / staging / integrated UI approval)
   ▼
 CI/CD → deployable artifact → live proof → closeout
 ```
+
+Trunk-based integration (OC-3, ratified 2026-11-14): no feature branches.
+Every story merges straight to main; incomplete user-visible flows stay
+expand-only or flagged. The feature-acceptance gate — not a branch — is
+what preserves "main always deployable" and the deployable-artifact
+promise. Chosen for least agent friction: one canonical base, small early
+conflicts, one delivery milestone, one merge gate per story.
 
 Human touchpoints by default: UI/Storybook approvals, PR merges,
 escalations. At higher autonomy levels the first two become policy-gated
@@ -330,9 +340,9 @@ Randy's direction (2026-11-13):
 Candidate phases — order follows the accepted declarative-first principle;
 each phase ends in something demonstrable.
 
-- **P0 — Vision & contracts (now).** Vision grilled and approved; OC-3
-  closed; feature backlog + board created; repo scaffolding. Storybook
-  spike (OC-6, ratified) starts here.
+- **P0 — Vision & contracts (now).** Vision grilled and approved; feature
+  backlog + board created; repo scaffolding. Storybook spike (OC-6,
+  ratified) starts here.
 - **P1 — Declarative core.** Workspace + environment config schemas,
   ledger schema, story lifecycle state machine, dispatch-package contract.
   No execution yet — the contracts everything else obeys. Storybook spike
@@ -404,6 +414,7 @@ Locked by Randy's notes (no re-litigation without new direction):
 | 2026-09-06 | Cheapest sufficient model per role; frontier budget for meta-advice only; review gates owned by the factory, not platform bots |
 | 2026-11-14 | OC-1: keep old ai-software-factory repo, made PRIVATE (done); read-only salvage source, no archive |
 | 2026-11-14 | OC-2: cloud execution GitHub-native — Actions-backed agent sessions first, adapter seam for others |
+| 2026-11-14 | OC-3: trunk-based integration — stories merge straight to main (squash, one commit per story); no feature branches; feature-acceptance gate (all stories merged + feature-level validation) before a feature is released; expand-only/flagged for incomplete user-visible flows; chosen for least agent friction |
 | 2026-11-14 | OC-4: autonomy levels = gate policy, one pipeline, measured promotion; Level 1 for factory's own build, Level 2 default for target repos after demo, Level 3 behind metrics + escalation contract |
 | 2026-11-14 | OC-5: dogfood starts at P3 exit (one story end-to-end by the factory, ledger intact); new features through factory, control-plane changes structured-vibe until review lane proven on itself |
 | 2026-11-14 | OC-6: Storybook intake spike early (P0/P1), screenshot-back first then live link, 2–3 model/adapter combos evaluated on a fixed script |
