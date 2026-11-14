@@ -1,12 +1,12 @@
 # Software Factory — Vision (consolidated 2026-11-14)
 
-Status: Vision APPROVED by grill rounds 1–2; Fable 5.2 external design
-review (issue #1) dispositioned; all owner calls OC-1…OC-11 RATIFIED
-2026-11-14. **Round-3 feasibility grill returned approve_with_fixes
-(48/100); fix pass applied 2026-11-14** (merge-tree integrity protocol,
-per-story ledger, cross-repo evidence validation, concrete token boundary,
-scope enforcement, concurrency smoke test, no-shell-freeze rule). Round-4
-confirmation pending. See
+Status: **VISION APPROVED — fully grilled.** Rounds 1–2 (consistency)
+APPROVE; Fable 5.2 external design review (issue #1) dispositioned; all
+owner calls OC-1…OC-11 RATIFIED 2026-11-14; round-3 feasibility grill
+approve_with_fixes (48/100) → fix pass applied; **round-4 confirmation
+APPROVE (21/21 verified, 0 failures, 2 minor clarifications folded)**.
+Cleared for backlog decomposition + P1. See
+[grill-round4-2026-11-14.md](grill-round4-2026-11-14.md),
 [grill-round3-2026-11-14.md](grill-round3-2026-11-14.md),
 [design-review-disposition-2026-11-14.md](design-review-disposition-2026-11-14.md),
 [grill-record-2026-11-14.md](grill-record-2026-11-14.md),
@@ -222,10 +222,10 @@ Verify main has not advanced past the reviewed merge base (if it has,
   (policy-configurable, OC-9)
   ▼
 main — trunk-based, squash, one commit per story   (RATIFIED OC-3)
-  │   squash tree verified equal to the reviewed merge-result tree;
-  │   evidence pinned by tree hash + commit SHA under durable
-  │   refs/factory/* refs (no rebase after review — the reviewed tree IS
-  │   the merge result, so the equality holds by construction)
+  │   post-merge: squash tree verified equal to the reviewed merge-result
+  │   tree (mismatch → auto-revert + reopen); evidence pinned by tree hash
+  │   + commit SHA under durable refs/factory/* refs (no rebase after
+  │   review — the reviewed tree IS the merge result)
   │   (incomplete user-visible flows stay expand-only or flagged)
   ▼
 Feature-acceptance gate: all feature stories merged + feature-level
@@ -354,11 +354,18 @@ factory-state repo           dedicated control home, spans ALL projects;
      `review_context` (base/reviewed SHAs + manifest digest).
   3. Before merge, verify main has not advanced past the reviewed merge
      base; if it has, recompute merge-tree and re-review. **No rebase after
-     review.**
-  4. The squash commit's tree is verified equal to `reviewed_tree`
-     (`merge_tree == squash_tree`); the equality holds by construction
-     because the reviewed tree IS the merge result. The ledger links
-     `reviewed_tree → review_context → merge_tree → squash_commit`.
+     review.** Git's non-fast-forward push protection is a second pre-merge
+     guard.
+  4. Merge via GitHub PR (squash). GitHub's squash-merge independently
+     computes the merge result from the PR branch's commits; for a clean
+     merge this produces the same tree as `git merge-tree` (same diff, same
+     base) — that equivalence is why the check works (round-4 N1).
+  5. **Post-merge verification**: `merge_tree == squash_tree`. A mismatch
+     (e.g. main advanced between the step-3 check and the merge — a TOCTOU
+     window, round-4 N2) triggers **auto-revert + story reopen**, treated as
+     a detected anomaly, then recompute + re-review. The exact pre/post
+     sequence is frozen in the P1 evidence-integrity contract. The ledger
+     links `reviewed_tree → review_context → merge_tree → squash_commit`.
   Evidence refs live under a durable `refs/factory/*` namespace — never
   Actions artifacts (90-day expiry), never `refs/pull/*` (not fetched by a
   fresh clone). `factory init` configures the fetch refspec in each product
