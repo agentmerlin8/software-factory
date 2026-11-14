@@ -11,6 +11,11 @@ No archive. `agentmerlin8/ai-software-factory` visibility flipped to private
 for proven control-plane machinery (ledger, controller, gates, review
 lane). The new repo stays ground-up; nothing is imported wholesale.
 
+**Public-flip timing (grill fix 1.1, Randy 2026-11-14): the new repo goes
+PUBLIC at P5 exit** — demo end-to-end working is the "something working"
+bar. P7 is polish of an already-public repo. (Resolves the lineage-vs-roadmap
+contradiction the round-1 grill found.)
+
 ## OC-2 — Cloud agent runtime — CLOSED
 
 **Decision (Randy, 2026-11-14): GitHub-native.** GitHub Actions–backed agent
