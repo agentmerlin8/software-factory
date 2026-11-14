@@ -39,6 +39,23 @@ CI/CD — involving the human only where the system cannot confidently decide.
 8. [docs/lineage.md](docs/lineage.md) — what we keep from the prior factory
    work and what we scrap.
 
+## Visibility — the board
+
+Work is tracked on the **[Software Factory board](https://github.com/orgs/agentmerlin8/projects/5)**
+(org project #5). Every work item is an issue in this repo. Three fields
+tell you everything at a glance:
+
+- **Status** — Backlog / In Progress / Done (overall).
+- **Stage** — Planning / Coding / Reviewing / Testing / Merging / Blocked /
+  Done (what state the active work is in right now).
+- **Work Type** — Feature / Story / Experiment / Review / Bug.
+
+Views: **Board** (by Status), **Pipeline** (by Stage), **Backlog** (table).
+Labels on issues mirror this (`factory`, `v1`, `stage:coding`, etc.). The
+ledger is the machine truth; the board is a render. New `factory`-labeled
+issues auto-add via `.github/workflows/auto-add-to-board.yml` (needs the
+`BOARD_PAT` secret — a classic PAT with `project` scope).
+
 ## Lineage
 
 Replaces the `ai-software-factory` kit effort (kept, now private). Lessons

@@ -1,0 +1,63 @@
+name: Auto-add to board
+
+# Adds factory-labeled issues/PRs to the Software Factory board (project #5)
+# and marks them Done on close. Requires a classic PAT with `project` scope
+# stored as the BOARD_PAT secret (GITHUB_TOKEN cannot access Projects v2).
+#
+# NOTE: org-owned boards do not emit a native Actions trigger for card moves;
+# this workflow handles add-on-open and mark-done-on-close only. Stage/Status
+# transitions during work are set by the orchestrator's sync tool.
+
+on:
+  issues:
+    types: [opened, reopened, closed]
+  pull_request:
+    types: [opened, reopened, closed]
+
+env:
+  PROJECT_ID: PVT_kwDOFE6csM4Brohy
+  STATUS_FIELD: PVTSSF_lADOFE6csM4Brohyzhp6VnA
+  BACKLOG_OPT: 4d1655fd
+  DONE_OPT: 410c13ad
+
+jobs:
+  add-to-board:
+    if: >
+      (github.event.action == 'opened' || github.event.action == 'reopened') &&
+      (contains(github.event.issue.labels.*.name, 'factory') ||
+       contains(github.event.pull_request.labels.*.name, 'factory'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add item and set Backlog
+        env:
+          GH_TOKEN: ${{ secrets.BOARD_PAT }}
+          CONTENT_ID: ${{ github.event.issue.node_id || github.event.pull_request.node_id }}
+        run: |
+          ITEM=$(gh api graphql -f query='mutation($p:ID!,$c:ID!){
+            addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}' \
+            -f p="$PROJECT_ID" -f c="$CONTENT_ID" --jq '.data.addProjectV2ItemById.item.id')
+          gh api graphql -f query="mutation {
+            updateProjectV2ItemFieldValue(input:{
+              projectId: \"$PROJECT_ID\", itemId: \"$ITEM\", fieldId: \"$STATUS_FIELD\",
+              value: { singleSelectOptionId: \"$BACKLOG_OPT\" }
+            }) { projectV2Item { id } }"
+
+  mark-done:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Done
+        env:
+          GH_TOKEN: ${{ secrets.BOARD_PAT }}
+          CONTENT_ID: ${{ github.event.issue.node_id || github.event.pull_request.node_id }}
+        run: |
+          ITEM=$(gh api graphql -f query='query($c:ID!){
+            node(id:$c){ ... on Issue { projectItems(first:10){nodes{id}} }
+            ... on PullRequest { projectItems(first:10){nodes{id}} } } }' \
+            -f c="$CONTENT_ID" --jq '.data.node.projectItems.nodes[0].id // empty')
+          [ -z "$ITEM" ] && exit 0
+          gh api graphql -f query="mutation {
+            updateProjectV2ItemFieldValue(input:{
+              projectId: \"$PROJECT_ID\", itemId: \"$ITEM\", fieldId: \"$STATUS_FIELD\",
+              value: { singleSelectOptionId: \"$DONE_OPT\" }
+            }) { projectV2Item { id } }"
