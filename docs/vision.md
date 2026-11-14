@@ -1,11 +1,14 @@
 # Software Factory — Vision (consolidated 2026-11-14)
 
 Status: Vision APPROVED by grill rounds 1–2; Fable 5.2 external design
-review (issue #1) dispositioned 2026-11-14; **all owner calls OC-1…OC-11
-RATIFIED by Randy 2026-11-14** (OC-8 state repo, OC-9 configurable
-merge/review/remediation policy, OC-10 decision-class escalation, OC-11
-engineer-primary persona). Round-3 grill of the amended sections pending.
-See [design-review-disposition-2026-11-14.md](design-review-disposition-2026-11-14.md),
+review (issue #1) dispositioned; all owner calls OC-1…OC-11 RATIFIED
+2026-11-14. **Round-3 feasibility grill returned approve_with_fixes
+(48/100); fix pass applied 2026-11-14** (merge-tree integrity protocol,
+per-story ledger, cross-repo evidence validation, concrete token boundary,
+scope enforcement, concurrency smoke test, no-shell-freeze rule). Round-4
+confirmation pending. See
+[grill-round3-2026-11-14.md](grill-round3-2026-11-14.md),
+[design-review-disposition-2026-11-14.md](design-review-disposition-2026-11-14.md),
 [grill-record-2026-11-14.md](grill-record-2026-11-14.md),
 [grill-disposition-2026-11-14.md](grill-disposition-2026-11-14.md),
 [grill-regrill-round2-2026-11-14.md](grill-regrill-round2-2026-11-14.md).
@@ -152,11 +155,16 @@ One product, four surfaces:
 
    **The inbox (design review 2.2)**: `factory inbox` — one queue of
    everything waiting on the human, ordered by how much downstream work
-   each item blocks. Each item is a decision card: the question, the
-   options, the agent's recommendation, evidence links, and what happens if
-   nobody answers. Pushed via GitHub assignment/mentions so phone
-   notifications come free. The board shows where work is; the inbox shows
-   what needs YOU. Lands in P2.
+   each item blocks. **Ordering algorithm (round-3 4.2):** `blocked_count` =
+   the number of stories transitively blocked (direct + indirect
+   dependencies) by this item, computed from the story dependency DAG;
+   tiebreak oldest-first. Simple, computable, and directly answers "what
+   should I look at first to unblock the most work." Each item is a decision
+   card: the question, the options, the agent's recommendation, evidence
+   links, and what happens if nobody answers. Pushed via GitHub
+   assignment/mentions so phone notifications come free. The board shows
+   where work is; the inbox shows what needs YOU. Lands in P2 (story
+   dependencies recorded in the P1 schema so ordering works).
 
    **Board minimum schema (frozen for P0; exact state list frozen in P1):**
    - Lanes: one per story lifecycle state. The P1 state machine defines the
@@ -202,18 +210,22 @@ Story decomposition (sequenced, dependency-aware, slice-sized)
 Per story: test plan → impl plan → plan review (fresh context)
   │   plan review FAIL → rework (≤2 loops) → 2-loop cap → BLOCKED
   ▼
-Code (TDD) → build + story tests green → adversarial code review on the
-  branch (fresh context, cross-model) → proof artifacts
+Code (TDD) → build + story tests green → compute the merge-result tree
+  (git merge-tree --write-tree branch main) → adversarial code review on
+  THAT merge-result tree (fresh context, cross-model) → proof artifacts
   │   code review FAIL → rework: loop 1 same tier, loop 2 next model tier;
   │   contract-class defects route back to the plan/PRD, not the coder
   │   2-loop cap → BLOCKED
   ▼
-Branch brought up to date with main → deterministic gates re-run on the
-  merge result → PR opened/updated → merge gate (policy-configurable, OC-9)
+Verify main has not advanced past the reviewed merge base (if it has,
+  recompute merge-tree + re-review) → PR opened/updated → merge gate
+  (policy-configurable, OC-9)
   ▼
 main — trunk-based, squash, one commit per story   (RATIFIED OC-3)
-  │   squash tree verified equal to the reviewed tree; evidence pinned by
-  │   tree hash + commit SHA under durable refs/factory/* refs
+  │   squash tree verified equal to the reviewed merge-result tree;
+  │   evidence pinned by tree hash + commit SHA under durable
+  │   refs/factory/* refs (no rebase after review — the reviewed tree IS
+  │   the merge result, so the equality holds by construction)
   │   (incomplete user-visible flows stay expand-only or flagged)
   ▼
 Feature-acceptance gate: all feature stories merged + feature-level
@@ -277,8 +289,13 @@ factory-state repo           dedicated control home, spans ALL projects;
   - **Scope (Randy, 2026-11-14):** a state vault is scoped to a **person, a
     team, or an organization**. Scope sets ownership, visibility, and who
     may dispatch/mine. One person may have a personal vault; a team shares
-    one; an org runs one across many teams/projects. The scope/ownership
-    model is frozen in P1.
+    one; an org runs one across many teams/projects. **Enforcement = the
+    state repo's GitHub visibility + collaborator/team permissions**
+    (round-3 1.3): person = private repo, one collaborator; team = private
+    repo shared with a GitHub team; org = internal/private org repo. The
+    `scope` field in workspace config is declarative (records intent); the
+    controller validates it against the GitHub API on `factory doctor`.
+    The scope/ownership model is frozen in P1.
   - **Mining (Randy, 2026-11-14):** because state is an Obsidian vault of
     generated markdown + ledger, **tools can mine it to see how things were
     built** — provenance, decisions, recurring patterns, cost/cycle history.
@@ -325,19 +342,50 @@ factory-state repo           dedicated control home, spans ALL projects;
   stories merged + acceptance gate passed = feature done); feature-level
   gate events (acceptance-pass / acceptance-fail) ARE first-class ledger
   events for audit. Story events remain the only state-driving events.
-- **Evidence integrity (design review 1.1)**: evidence is pinned by **tree
-  hash AND commit SHA**; before merge the branch is brought up to date with
-  main and the deterministic gates re-run on the merge result; the squash
-  commit's tree is verified equal to the reviewed tree. Evidence refs live
-  under a durable `refs/factory/*` namespace that ledger tooling fetches —
-  never Actions artifacts (90-day expiry) and never dependent on
-  `refs/pull/*` (not fetched by a fresh clone). Extends the proven
-  review_context pattern (immutable base/reviewed SHAs + manifest digest).
-- **Ledger write location (OC-8, RATIFIED)**: the ledger lives in the
-  dedicated factory-state repo (above), never in a product repo and never
-  on product main. Concurrency: git non-fast-forward rejection as
-  compare-and-swap for appends and claims; an Actions concurrency group per
-  story as the cloud mutex. The state repo absorbs the write traffic.
+- **Evidence integrity (design review 1.1; round-3 2.1/2.2/2.3)**: evidence
+  is pinned by **tree hash AND commit SHA**. The merge-integrity protocol
+  resolves the round-1 "squash tree = reviewed tree" vs "up to date with
+  main" contradiction by reviewing the MERGE RESULT, not the bare branch:
+  1. After build + story tests green, compute the merge-result tree with
+     `git merge-tree --write-tree <branch> main` (plumbing; touches neither
+     working tree nor index — verified).
+  2. The adversarial review runs on THAT merge-result tree. The ledger
+     records `reviewed_tree` (the merge-result tree reviewed) and the
+     `review_context` (base/reviewed SHAs + manifest digest).
+  3. Before merge, verify main has not advanced past the reviewed merge
+     base; if it has, recompute merge-tree and re-review. **No rebase after
+     review.**
+  4. The squash commit's tree is verified equal to `reviewed_tree`
+     (`merge_tree == squash_tree`); the equality holds by construction
+     because the reviewed tree IS the merge result. The ledger links
+     `reviewed_tree → review_context → merge_tree → squash_commit`.
+  Evidence refs live under a durable `refs/factory/*` namespace — never
+  Actions artifacts (90-day expiry), never `refs/pull/*` (not fetched by a
+  fresh clone). `factory init` configures the fetch refspec in each product
+  repo (`git config --add remote.origin.fetch '+refs/factory/*:refs/factory/*'`);
+  ledger tooling does targeted `git fetch origin '+refs/factory/<story>/*'`.
+- **Cross-repo evidence validation (OC-8; round-3 1.1/1.4)**: the ledger is
+  in the state repo, the code/evidence in product repos. Validation
+  protocol: (1) read the ledger entry's `repo@sha`; (2) ensure the product
+  repo is available (cached clone or `git fetch <product-repo> <sha>`);
+  (3) resolve the SHA + `refs/factory/<story>/*` against THAT product repo's
+  object DB; (4) a missing/unresolvable object surfaces as BLOCKED with
+  `evidence-unreachable` reason — never a silent pass. The validator needs
+  network access to referenced product repos (or cached clones).
+  `factory doctor --deep` checks all ledger SHAs still resolve (detects
+  product force-push dangling refs); board sync spot-checks recent story
+  SHAs. Force-push detection is visibility/audit, not a hard gate.
+- **Ledger write location + layout (OC-8, RATIFIED; round-3 1.2/5.2)**: the
+  ledger lives in the dedicated factory-state repo, never in a product repo
+  and never on product main. **Per-story ledger files**
+  (`workspaces/<name>/ledger/stories/<story-id>.jsonl`) — chosen so different
+  stories NEVER contend on append; only same-story writes collide, and the
+  per-story Actions concurrency group already serializes those. A
+  per-workspace index/rollup is a derived render, not a write target.
+  Concurrency within a story: git non-fast-forward rejection as
+  compare-and-swap; the CLI retries a rejected push up to 3× with
+  exponential backoff (1s/2s/4s); exhaustion → BLOCKED with `cas-contention`
+  reason surfaced in the inbox. The state repo absorbs the write traffic.
 - **Workspace policy config (OC-9, RATIFIED)**: per-workspace, frozen as
   schema in P1, enforced by the controller —
   - **merge policy**: (1) human-merges-every-story (Level 1 default for the
@@ -354,26 +402,58 @@ factory-state repo           dedicated control home, spans ALL projects;
   - **remediation**: in-session coder fix loops (default) / separate
     remediation dispatch / human-directed fixes; loop caps + tier
     escalation per policy.
-- **Human approval anchoring (design review 1.3)**: "a human approved" is
-  tied to a GitHub object the agent token cannot forge — a human PR
-  review/merge, or an Actions environment with required reviewers. The
-  ledger records a reference; a gate verifies it through the API.
-  Control-plane paths (`.github/workflows/`, gate catalog, autonomy policy,
-  override file) are protected by CODEOWNERS + branch protection; the agent
-  token carries no `workflows` permission. The proven human-only
+  - **branch protection rulesets per merge mode (round-3 5.3)**: `factory
+    init` configures branch protection via the GitHub API to match the mode.
+    Mode 1: require 1 human PR review + the factory gate status checks.
+    Mode 2/3: require the factory gate status checks ONLY (no human-review
+    requirement) — the factory review gate IS the approval, so auto-merge
+    isn't blocked waiting for a review the policy says isn't needed.
+    (GitHub hard-blocks self-approval — an author can't approve its own PR —
+    so requiring a review on agent-authored PRs would deadlock auto-merge.)
+- **Human approval anchoring (design review 1.3; round-3 3.1/3.2)**: "a human
+  approved" is tied to a GitHub object the agent identity cannot forge. Two
+  DISTINCT mechanisms, mapped to distinct gates:
+  - **Code-merge gate** → a human PR review/merge by a human account.
+  - **Agent-dispatch gate** → an Actions environment with required reviewers
+    (a human approves before an agent session runs against a protected
+    environment, e.g. production deploy or a Level 2→3 transition).
+  The ledger records a reference; a gate verifies it through the API.
+  **Concrete agent token boundary (frozen in the P1 threat model):** the
+  factory App is granted `contents: write`, `pull_requests: write`
+  (create/update PRs), `issues: write` (board sync + inbox mentions),
+  `metadata: read` — and **no `workflows` permission**. The App identity is
+  **never a required approver** and is **never listed in CODEOWNERS**;
+  CODEOWNERS lists only human handles and is itself branch-protected (the
+  App cannot push to it on main). GitHub's hard self-approval block backs
+  this: the agent authors the PR, so it cannot approve it. Control-plane
+  paths (`.github/workflows/`, gate catalog, autonomy policy, override file)
+  are CODEOWNERS + branch-protection guarded. The proven human-only
   comment-gate pattern (positive-only actor trust) ports from the reference
   implementation as the command surface, with this anchoring underneath.
-- **Security posture (design review 1.4)**: a threat model is a P1
-  deliverable. Agent jobs run behind a network egress allowlist with keys
-  scoped per job. A deterministic new-dependency gate checks existence,
+- **Security posture (design review 1.4; round-3 3.3/3.4)**: a threat model
+  is a P1 deliverable. Keys are scoped per job. **Egress allowlist is
+  deferred to P6** (Randy, 2026-11-14): GitHub-hosted runners cannot filter
+  network egress natively; P3 accepts that risk with per-job credential
+  scoping + the secret-scanning gate as compensating controls, documented as
+  an accepted risk in the threat model; true egress filtering arrives with
+  self-hosted/proxy-capable runners at P6. A deterministic new-dependency
+  gate checks existence,
   age/usage, allowed licence, and committed lockfile; a new dependency is a
   human touchpoint at Levels 1–2. Board-write/dispatch authority is named
-  (positive-only actor trust). A secret-scanning gate runs before push.
-- **Claim leases**: every claim carries a TTL (default 30m cloud, 10m
-  local), auto-renewed by the holding process; an expired claim auto-releases
-  with an audit event, so a dead ephemeral session never holds a story
-  hostage. The fail-closed human override file remains the emergency release,
-  not the normal path. (Resolves the claim-lock vs ephemeral-Actions hole.)
+  (positive-only actor trust). **Secret scanning runs pre-push** (round-3
+  3.4): a deterministic gate in the agent's coding session before the branch
+  push (gitleaks/trufflehog, tool frozen in P1) — secrets never reach
+  GitHub; detection fails the gate and the agent remediates.
+- **Claim leases (round-3 5.5)**: every claim carries a TTL (default 30m
+  cloud, 10m local), auto-renewed by the holding process; an expired claim
+  auto-releases with an audit event, so a dead ephemeral session never holds
+  a story hostage. Split-brain guards: (1) renewal runs on a background
+  timer, independent of the main agent loop yielding; (2) before EVERY
+  side-effect operation (branch push, PR open/update) the job re-checks its
+  lease in the ledger and fails immediately with `lease-expired` if lost;
+  (3) the effective TTL includes a grace period (TTL + 2× renewal interval)
+  for clock skew. The fail-closed human override file remains the emergency
+  release, not the normal path.
 - **Cloud execution**: GitHub Actions–backed agent sessions (RATIFIED
   OC-2, 2026-11-14): the CLI triggers a workflow running an agent in a
   container with repo-scoped credentials. Agent jobs use a **GitHub App
@@ -397,12 +477,21 @@ factory-state repo           dedicated control home, spans ALL projects;
   comment/label commands (see Cloud execution); the ledger records the
   dispatch event only after the CLI receives it. The board triggers the
   action; the ledger remains the sole source of truth.
-- **Onboarding**: `factory init [--guided]` — creates the workspace in the
-  factory-state repo, onboards a target repo, generates an environment-config
-  template, and validates the setup with `factory doctor`. `--guided` asks
-  setup questions interactively (a lower-touch profile; the primary audience
-  is engineers, OC-11). Onboarding is scripted/mechanical first; the guide is
-  an adapter, never the sole installer.
+- **Onboarding + state-repo bootstrap (round-3 6.3)**: `factory init
+  [--guided] --state-repo <url>` — creates the workspace in the
+  factory-state repo, onboards a target repo (configures the
+  `refs/factory/*` fetch refspec + branch protection per merge mode),
+  generates an environment-config template, and validates with `factory
+  doctor`. If the state repo isn't present locally it's cloned; if the URL
+  doesn't exist on GitHub, `--create-state-repo` creates it via `gh repo
+  create`. **Discover/join:** subsequent `factory init` calls with the same
+  `--state-repo` ADD a workspace to the existing repo (the state repo spans
+  projects). State-repo root layout: `workspaces/<name>/` (per project,
+  each with `ledger/stories/<story-id>.jsonl` + config + records + renders)
+  and shared `templates/`. `--guided` asks setup questions interactively (a
+  lower-touch profile; the primary audience is engineers, OC-11). Onboarding
+  is scripted/mechanical first; the guide is an adapter, never the sole
+  installer.
 - **Dependency policy**: agents may modify dependency manifests
   (package.json, requirements.txt, etc.) as part of story code; all
   dependency changes must be committed with the story; `factory doctor`
@@ -616,66 +705,96 @@ each phase ends in something demonstrable.
   Storybook spike (OC-6, ratified) starts here as **throwaway exploration**:
   hardcoded setup, fixed conversation script, output = model/adapter
   evaluation data, not reusable code. P4 builds the real intake on P1
-  schemas, informed by the spike. **Before P1 freezes contracts, run one
-  story through by hand with the human adapter** (design review §3) — the
-  contracts are frozen against a real run, not only paper.
+  schemas, informed by the spike. **Two pre-freeze validations (round-3
+  6.2):** (1) run one story through by hand with the human adapter
+  (exercises story schema, transition catalog, evidence integrity); AND
+  (2) a **concurrency smoke test** — two independent stories dispatched
+  simultaneously against the same target repo with the state repo separate
+  (exercises per-story ledger CAS, claim leases, cross-repo evidence). A
+  single-story hand-run cannot catch contention or cross-repo bugs; both
+  must pass before P1 freezes. Hand-run with two terminal sessions suffices.
 - **P1 — Declarative core.** Workspace + environment config schemas,
   ledger schema (incl. measurement fields, §10), story lifecycle state
   machine, dispatch-package contract. No execution yet — the contracts
-  everything else obeys. P1 must freeze:
+  everything else obeys. **No specification shell may freeze (round-3
+  6.1):** every contract below ships with a concrete example + data schema
+  + validation rule in pseudocode before freeze; a name with no internals
+  is not a frozen contract. P1 must freeze:
   - the **complete transition catalog**: every state → event → next-state
     tuple tagged with gate type (none | deterministic | llm-review |
     human-approval) and autonomy-level override rules (which levels skip
-    the human);
-  - the **story schema**: id, feature ref, ACs anchored to the PRD,
-    structural-signal count, dependencies, target repo, state;
+    the human); ships with sample tuples covering the happy path + each
+    failure/escalation path;
+  - the **story schema**: id, feature ref, ACs anchored to the PRD (with
+    PRD version pin), structural-signal count, dependencies (for inbox
+    ordering), target repo, state;
   - the **story failure lifecycle**: rework loop (tiered), 2-loop cap,
     BLOCKED, human/authorized-agent disposition paths (accept / re-scope /
     amend-spec / retry-higher-tier / reject);
   - the **feature-acceptance failure path** (BLOCKED + auto-created fix
     stories) and feature-state computation rules (computed render; gate
     pass/fail are ledger events);
-  - the **model-routing schema** (roles × tiers) and claim-lease semantics;
+  - the **model-routing schema** (roles × tiers) and claim-lease semantics
+    (background renewal, pre-side-effect lease check, grace period);
   - the **factory-state repo layout (OC-8)**: dedicated state repo as an
-    Obsidian vault, per-project workspaces, repo@sha evidence binding,
-    ledger CAS + per-story concurrency mutex; no in-repo control home;
-    **scope/ownership model (person | team | organization)** governing
-    visibility and dispatch/mine authority;
-  - the **workspace policy schema (OC-9)**: merge policy (3 modes), Copilot
-    review requirements (on/off), remediation mode — all controller-enforced;
+    Obsidian vault, the exact directory tree (`workspaces/<name>/` +
+    `ledger/stories/<story-id>.jsonl` + shared `templates/`), bootstrap +
+    discover/join procedure, repo@sha cross-repo evidence validation
+    protocol, per-story ledger CAS + retry/backoff, per-story concurrency
+    mutex; no in-repo control home; **scope/ownership model (person | team |
+    organization)** bound to GitHub permissions, validated by `factory
+    doctor`;
+  - the **workspace policy schema (OC-9)**: merge policy (3 modes) + the
+    branch-protection ruleset per mode, Copilot review requirements (on/off),
+    remediation mode — all controller-enforced;
   - the **escalation decision-class list + assumption-log schema (OC-10)**;
   - **schema version on every ledger event from the first commit** (later
     changes are migrations);
-  - **evidence integrity**: tree-hash + SHA pinning, durable
-    `refs/factory/*` evidence store, up-to-date-with-main + gate re-run
-    before merge, squash-tree-equals-reviewed-tree check;
-  - **human approval anchoring** (GitHub-object proof + CODEOWNERS +
-    no-`workflows` agent token) and the **threat model** (egress allowlist,
-    per-job keys, dependency gate, secret scanning, dispatch authority);
+  - **evidence integrity**: the merge-tree protocol (compute merge-result
+    tree → review it → no rebase after review → squash tree = reviewed
+    merge-result tree), two-tree pinning (`reviewed_tree`/`merge_tree`),
+    durable `refs/factory/*` store + fetch-refspec config, cross-repo
+    validation + force-push liveness check;
+  - **human approval anchoring** (the exact App permission set; App never a
+    required approver / never in CODEOWNERS; human-only CODEOWNERS +
+    branch protection; no-`workflows` token; code-merge vs agent-dispatch
+    gate mechanisms) and the **threat model** (per-job keys, dependency
+    gate, pre-push secret scanning + tool choice, dispatch authority,
+    egress-allowlist accepted-risk posture for P3 + P6 hardening path);
   - **budget ceilings** as stop rules; **idempotent-replay semantics**
-    (upserts keyed by dispatch id); **process + prompt version sealed into
-    dispatch identity**; **flag registry + lifecycle**; **PRD versioning +
-    changed-criteria gate**; **test-gaming gate** (deleted tests / new
-    skips / fewer assertions fail; AC→named-test traceability);
-    **reduced-assurance review mode**; the maintained **architecture +
-    conventions doc**.
+    (idempotency-key format, upsert targets = branch/PR/issue keyed by
+    dispatch id, reset-to-pinned-base procedure); **process + prompt version
+    sealed into dispatch identity**; **flag registry + lifecycle**; **PRD
+    versioning mechanism + changed-criteria gate algorithm**; **test-gaming
+    gate** (the diff algorithm + baseline: deleted tests / new skips / fewer
+    assertions fail; AC→named-test traceability); **reduced-assurance review
+    mode**; the maintained **architecture + conventions doc**; **inbox
+    ordering** (blocked_count over the dependency DAG).
   Storybook spike continues.
-- **P2 — CLI read path + control plane.** `factory status/doctor`,
-  controller/ledger/gates/renders ported genericized from the kit work;
-  board sync (visibility first — Randy needs to SEE the work); one-way
-  ledger→board mirror with the sync tool as sole writer + `factory board
-  reconcile`; **`factory inbox`** (decision cards, blockage-ordered, pushed
-  via GitHub mentions).
+- **P2 — CLI read path + control plane.** `factory status/doctor` (incl.
+  `--deep` SHA-liveness check), controller/ledger/gates/renders ported
+  genericized from the kit work; board sync (visibility first — Randy needs
+  to SEE the work); one-way ledger→board mirror with the sync tool as sole
+  writer + `factory board reconcile`; **`factory inbox`** (decision cards,
+  blockage-ordered, pushed via GitHub mentions). **Board write fallback
+  (round-3 5.4):** Projects V2 GraphQL field writes need org-level project
+  scope; `factory board sync` detects writability and falls back to issue
+  labels + body for Stage tracking where unavailable — custom fields are
+  best-effort, the ledger records them regardless.
 - **P3 — Execution seam.** One adapter end-to-end (Hermes local first):
   dispatch → agent session → artifacts → evidence → transitions. Then the
   GitHub Actions cloud adapter (OC-2 ratified), per-step dispatch with
   ledger checkpoints + claim leases, App-token events, comment/label
   dispatch trigger. Parameter-driven model routing from day one; metering
-  live (§10); budget enforcement live. **Deployability guard:** CI on every
-  main push runs build + smoke tests; red main = BLOCKED new dispatches
-  until green, and **the offending commit is auto-reverted with its story
-  reopened** (design review §3 — red main has an owner). Architecture +
-  conventions doc updated by a merge gate. **P3 exit = dogfood cutoff
+  live (§10); budget enforcement live. **State-repo reachability (round-3
+  1.5):** push failures retry 3×; exhaustion → job fails with
+  `state-repo-unreachable`, dispatch replayable. **Deployability guard:** CI
+  on every main push runs build + smoke tests; red main = BLOCKED new
+  dispatches until green, and **the offending commit is auto-reverted with
+  its story reopened** (design review §3 — red main has an owner).
+  Architecture + conventions doc updated by a merge gate. Egress allowlist
+  NOT enforced here (accepted risk, §5); per-job key scoping + pre-push
+  secret scanning are the compensating controls. **P3 exit = dogfood cutoff
   (OC-5 ratified).**
 - **P4 — Intake & Storybook.** Guided intake session (harness-agnostic
   protocol, Hermes first — OC-7 ratified), question flow, wireframe
@@ -777,3 +896,4 @@ Locked by Randy's notes (no re-litigation without new direction):
 | 2026-11-14 | OC-10 RATIFIED (Randy): deterministic decision-class escalation + recorded-assumption log with veto→rework; class list is extendable policy config |
 | 2026-11-14 | OC-11 RATIFIED (Randy): engineering professionals are the target audience — enabling people like Randy to build software autonomously; supersedes non-developer-first as the primary target; architecture/data-model/decomposition approval gates first-class; touchpoints remain a profile |
 | 2026-11-14 | OC-8 confirmed + extended (Randy): state vault is a NEW dedicated repo separate from ~/Notes; scoped to a person, team, or organization (sets ownership/visibility/dispatch+mine authority); tools mine the vault to see how things were built (provenance/decisions/patterns/cost history) — a queryable knowledge substrate; scope model P1, mining tools P6+ |
+| 2026-11-14 | Round-3 feasibility fix pass (Randy agreed all): merge-integrity via git merge-tree (review the merge-result tree, no rebase after review, squash tree = reviewed merge-result tree — resolves the round-1 contradiction); per-story ledger files (workspaces/<name>/ledger/stories/<id>.jsonl) eliminate cross-story CAS contention + 3× backoff retry; cross-repo evidence validation protocol (repo@sha fetch, evidence-unreachable BLOCKED) + force-push liveness check; concrete App token boundary (contents/PR/issues write, no workflows, never a required approver, human-only CODEOWNERS); scope enforced via GitHub permissions; branch-protection rulesets per merge mode; claim-lease split-brain guards; inbox blocked_count ordering; state-repo bootstrap/discover-join; egress allowlist deferred to P6 (P3 accepted risk + compensating controls); pre-push secret scanning; two pre-freeze validations (single-story hand-run + two-story concurrency smoke test); no-specification-shell-freezes rule (example+schema+pseudocode) |
