@@ -95,14 +95,19 @@ Obsidian renders beyond one status file. Full vision = north star, post-v1.
 | #5 | SKEL-3 controller-writer security | Backlog | Planning | |
 | #6 | SKEL-4 merge protocol | Backlog | Planning | verify via EXP-1 first |
 | #7 | SKEL-5 measurement + seeded-defect | Backlog | Planning | |
-| #8 | EXP-1 squash equivalence on a real PR | Backlog | Planning | cheap, de-risks SKEL-4 |
-| #9 | EXP-2 throwaway-repo plan check | Backlog | Planning | settles "verify" items |
+| #8 | EXP-1 squash equivalence on a real PR | Done | Done | verified 2026-11-14; see docs/experiments/ |
+| #9 | EXP-2 throwaway-repo plan check | Done | Done | verified 2026-11-14; see docs/experiments/ |
 | #1, #2 | Fable reviews 1 & 2 | Done | Done | dispositioned |
 
-**Recommended next action:** run EXP-1 and EXP-2 (cheap verification
-experiments), then build SKEL-1. EXP-2 is important: the org is on the **Free
-plan** — private-repo branch protection/rulesets return 403 (verified). The
-controller-writer model (OC-14) is designed to NOT depend on branch protection.
+**Recommended next action:** build SKEL-1 (walking skeleton + control arm).
+EXP-1/EXP-2 are DONE (2026-11-14) — results in `docs/experiments/`. Key
+findings that shape the build: (a) Free plan has NO native up-to-date gate —
+OC-15's strict check must be controller-enforced (amendment pending owner
+ratification); (b) GITHUB_TOKEN approvals are org-blocked, App approvals work;
+(c) controller App needs `checks: write` added; (d) Actions concurrency
+cancels pending runs — controller needs retry/requeue. The org is on the
+**Free plan** — private-repo branch protection/rulesets return 403 (verified).
+The controller-writer model (OC-14) is designed to NOT depend on branch protection.
 
 ## 6. Board mechanics (IDs for scripting)
 
