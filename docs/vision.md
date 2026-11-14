@@ -266,14 +266,25 @@ factory-state repo           dedicated control home, spans ALL projects;
 - **Factory repo** = this repo. One versioned home for the process; target
   repos are onboarded to it.
 - **Factory-state repo (OC-8, RATIFIED 2026-11-14)** = a DEDICATED repo,
-  separate from every product repo, that holds ALL factory state and spans
-  projects. Structured as an **Obsidian vault**: machine truth is the
-  append-only JSONL ledger; the human-facing view is generated markdown
-  (state.md / DASHBOARD.md / PROVENANCE.md / story records) browsable in
-  Obsidian. **State never lives in the product repo** — this supersedes the
-  kit's old "ledger lives with the code" law. Kept separate from the
-  personal ~/Notes vault so high-frequency machine writes don't fight its
-  Syncthing/cron sync.
+  separate from every product repo AND from the personal ~/Notes vault,
+  that holds ALL factory state and spans projects. Structured as an
+  **Obsidian vault**: machine truth is the append-only JSONL ledger; the
+  human-facing view is generated markdown (state.md / DASHBOARD.md /
+  PROVENANCE.md / story records) browsable in Obsidian. **State never lives
+  in the product repo** — this supersedes the kit's old "ledger lives with
+  the code" law. Kept separate from ~/Notes so high-frequency machine writes
+  don't fight its Syncthing/cron sync.
+  - **Scope (Randy, 2026-11-14):** a state vault is scoped to a **person, a
+    team, or an organization**. Scope sets ownership, visibility, and who
+    may dispatch/mine. One person may have a personal vault; a team shares
+    one; an org runs one across many teams/projects. The scope/ownership
+    model is frozen in P1.
+  - **Mining (Randy, 2026-11-14):** because state is an Obsidian vault of
+    generated markdown + ledger, **tools can mine it to see how things were
+    built** — provenance, decisions, recurring patterns, cost/cycle history.
+    The vault is a queryable knowledge substrate, not just a state store.
+    Mining tools are a later-phase capability built on top, feeding the
+    statistics view (§10) and the "how was this built" provenance story.
 - **Intake Engine** = a stateful session manager, distinct from the
   fire-and-forget dispatch pipeline: it drives the question flow, Storybook
   wireframe generation, and PRD production, and owns the conversation state.
@@ -628,6 +639,8 @@ each phase ends in something demonstrable.
   - the **factory-state repo layout (OC-8)**: dedicated state repo as an
     Obsidian vault, per-project workspaces, repo@sha evidence binding,
     ledger CAS + per-story concurrency mutex; no in-repo control home;
+    **scope/ownership model (person | team | organization)** governing
+    visibility and dispatch/mine authority;
   - the **workspace policy schema (OC-9)**: merge policy (3 modes), Copilot
     review requirements (on/off), remediation mode — all controller-enforced;
   - the **escalation decision-class list + assumption-log schema (OC-10)**;
@@ -685,7 +698,13 @@ each phase ends in something demonstrable.
   stories with known outcomes, replayed before any process change) and
   **reviewer catch-rate calibration** (seeded-defect runs); optional board
   drag-to-dispatch UX (org board + App webhook relay) if still wanted.
-- **P7 — Public polish.** Non-developer getting-started, fork-and-adapt
+- **P6+ — State-vault mining.** Tools that mine the factory-state vault to
+  show **how things were built**: provenance queries, decision history,
+  recurring patterns, cost/cycle trends across projects and scopes. Built on
+  the generated markdown + ledger; feeds §10 statistics and the "how was
+  this built" story. Scope-aware (person/team/org). A capability on top of
+  the state substrate, not a blocker to the pipeline.
+- **P7 — Public polish.** Engineer-focused getting-started, fork-and-adapt
   demo, scripted onboarding, docs. The repo is already public since P5;
   this phase polishes what is public.
 
@@ -757,3 +776,4 @@ Locked by Randy's notes (no re-litigation without new direction):
 | 2026-11-14 | OC-9 RATIFIED (Randy): merge policy CONFIGURABLE per workspace (human-every-story / auto-merge-green-expand-only-with-human-at-feature-acceptance / full-auto-opt-in), alongside configurable Copilot review requirements (on = required gate input; off = factory panel owns the gate) and configurable remediation mode; controller-enforced policy schema in P1 |
 | 2026-11-14 | OC-10 RATIFIED (Randy): deterministic decision-class escalation + recorded-assumption log with veto→rework; class list is extendable policy config |
 | 2026-11-14 | OC-11 RATIFIED (Randy): engineering professionals are the target audience — enabling people like Randy to build software autonomously; supersedes non-developer-first as the primary target; architecture/data-model/decomposition approval gates first-class; touchpoints remain a profile |
+| 2026-11-14 | OC-8 confirmed + extended (Randy): state vault is a NEW dedicated repo separate from ~/Notes; scoped to a person, team, or organization (sets ownership/visibility/dispatch+mine authority); tools mine the vault to see how things were built (provenance/decisions/patterns/cost history) — a queryable knowledge substrate; scope model P1, mining tools P6+ |

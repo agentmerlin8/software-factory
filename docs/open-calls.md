@@ -118,12 +118,20 @@ Design as carved:
   appends and claims; an Actions concurrency group per story as the cloud
   mutex. The state repo, not main, absorbs the write traffic.
 
-**One interpretation flagged for Randy (not blocking):** "a dedicated repo"
-is read as a NEW factory-state repo, kept separate from the personal
-`~/Notes` vault — because high-frequency machine ledger writes would
-conflict with that vault's Syncthing + cron auto-backup sync. If Randy meant
-literally inside the existing personal vault, the sync-conflict problem must
-be designed around first. See the round-3 grill.
+**Confirmed (Randy, 2026-11-14): a NEW dedicated factory-state repo,
+separate from the personal `~/Notes` vault** — high-frequency machine ledger
+writes must not fight that vault's Syncthing + cron auto-backup sync.
+
+**Scope + mining (Randy, 2026-11-14):** the state vault can be **scoped to a
+person, a team, or an organization**. That scope sets ownership and
+visibility of the state and who may mine it. Because the state is an
+Obsidian vault of generated markdown + the ledger, **tools can mine it to
+see how things were built** — provenance, decisions, patterns, cost/cycle
+history — not just read current state. The vault is a queryable knowledge
+substrate, not only a state store. The scope/ownership model is frozen in
+P1; the mining tools are a capability built on top (later phase), feeding
+the measurement/statistics view (§10) and the "how was this built"
+provenance story.
 
 ## OC-9 — Merge policy + review/remediation policy — CLOSED
 

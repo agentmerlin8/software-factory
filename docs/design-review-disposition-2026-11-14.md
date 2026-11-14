@@ -194,8 +194,10 @@ in fresh context, cross-family.
   Supersedes "ledger lives with the code." Evidence bound by repo@sha
   resolved against each product repo's object DB; CAS + per-story
   concurrency mutex. Kept separate from the personal ~/Notes vault (sync
-  conflict). *One interpretation flagged, not blocking: read as a NEW state
-  repo, not literally inside ~/Notes — confirmed at round-3 grill.*
+  conflict) — **confirmed by Randy**. **Extended (Randy):** the vault is
+  scoped to a person, team, or organization (ownership/visibility/dispatch+
+  mine authority), and tools mine it to see how things were built — a
+  queryable knowledge substrate. Scope model P1; mining tools P6+.
 - **OC-9** — **configurable**: merge policy (human-every-story /
   auto-merge-green-expand-only-with-human-at-feature-acceptance /
   full-auto-opt-in) **alongside Copilot review requirements (on/off) and
