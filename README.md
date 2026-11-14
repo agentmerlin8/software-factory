@@ -1,5 +1,7 @@
 # Software Factory
 
+> **Picking up in a fresh session? Read [HANDOFF.md](HANDOFF.md) first.**
+
 Ground-up rewrite of the AI software factory: **idea → deployable artifact**,
 with the human involved at exactly the right steps.
 
