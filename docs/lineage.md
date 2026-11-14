@@ -36,10 +36,12 @@ reference implementation:
 
 ## Old repo disposition
 
-`agentmerlin8/ai-software-factory` stays untouched during the build. Once
-`software-factory` reaches P5 (demo end-to-end), add a README notice there
-pointing to the successor; archive after salvage is complete. Public flip
-of the new repo happens at the same milestone (Randy, 2026-11-14).
+**RATIFIED (OC-1, Randy 2026-11-14): keep it, make it private.**
+`agentmerlin8/ai-software-factory` was flipped to private 2026-11-14
+(verified). No archive. It stays untouched during the build and serves as
+the read-only salvage source. A README notice pointing to the successor
+goes in once `software-factory` reaches P5 (demo end-to-end); the new repo
+flips public at that same milestone (Randy, 2026-11-14).
 
 ## Boundary rule
 

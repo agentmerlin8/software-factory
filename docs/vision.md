@@ -1,8 +1,8 @@
 # Software Factory — Vision (consolidated 2026-11-14)
 
-Status: DRAFT — synthesized from Randy's notes; open calls listed in
-[open-calls.md](open-calls.md). Nothing here is buildable until the calls
-close and the vision is grilled.
+Status: 6 of 7 open calls ratified by Randy 2026-11-14 (see
+[open-calls.md](open-calls.md)); OC-3 (branching) in discussion. Vision
+grill still pending before build starts.
 
 ## 1. Goal
 
@@ -197,9 +197,10 @@ software-factory repo        CLI · core agents · skills/process rules ·
   ledger, gates, renders, board sync. Never needs an AI — that's what makes
   human mode and portability real. AI only ever sits behind a dispatch
   package.
-- **Cloud execution**: the CLI spawns cloud agent sessions (GitHub
-  Actions–backed is the candidate); board drag can trigger the same path.
-  (mechanism = OC-2)
+- **Cloud execution**: GitHub Actions–backed agent sessions (RATIFIED
+  OC-2, 2026-11-14): the CLI triggers a workflow running an agent in a
+  container with repo-scoped credentials; board drag triggers the same
+  path. Adapter seam keeps other cloud runtimes swappable.
 
 Judgment calls I'm making explicit so Randy can unmake them:
 - Python for the control plane (proven in MIE/kit; stdlib-only, portable).
@@ -259,7 +260,7 @@ Distilled from five months of runs and studies. These survive the rewrite:
     calls walked through in plain language; the owner understands what's
     being built (2026-10-18).
 
-## 7. Autonomy model — three levels (tentative)
+## 7. Autonomy model — three levels (rules RATIFIED OC-4)
 
 Randy's scale (2026-11-13), aligned with the earlier crawl/walk/run lever
 (2026-08-21):
@@ -270,7 +271,8 @@ Randy's scale (2026-11-13), aligned with the earlier crawl/walk/run lever
 | 2 | Walk | Human approves at the three touchpoints only: UI/Storybook, merges, escalations |
 | 3 | Run | "I gave you my description — only interrupt me when you can't answer confidently." Goal state. |
 
-Design implications (to be settled, OC-4):
+RATIFIED (OC-4, 2026-11-14): levels are gate policy, one pipeline, measured
+promotion; details below.
 - Levels are **policy configuration**, not separate code paths: same
   pipeline, gate policy decides which transitions need a human actor.
 - Level 3 requires a confidence/escalation contract: what counts as "can't
@@ -306,7 +308,10 @@ Randy's direction (2026-11-13):
   but every story tracked and visible on the board, walked through with
   Randy.
 - **Dogfood as soon as practical** — use the factory to build the factory.
-  The readiness cutoff is an open call (OC-5).
+  Cutoff RATIFIED (OC-5, 2026-11-14): P3 exit — one story end-to-end by the
+  factory itself with the ledger intact; then NEW features go through the
+  factory, control-plane changes stay structured-vibe until the review lane
+  is proven on itself.
 - **Known risk: Copilot agent inheritance.** If the target repo contains an
   agent with the same name as the agent under development, Copilot inherits
   the repo's version; changing agent files mid-build confuses the process.
@@ -325,26 +330,30 @@ Randy's direction (2026-11-13):
 Candidate phases — order follows the accepted declarative-first principle;
 each phase ends in something demonstrable.
 
-- **P0 — Vision & contracts (now).** This document grilled and approved;
-  open calls closed; feature backlog + board created; repo scaffolding.
+- **P0 — Vision & contracts (now).** Vision grilled and approved; OC-3
+  closed; feature backlog + board created; repo scaffolding. Storybook
+  spike (OC-6, ratified) starts here.
 - **P1 — Declarative core.** Workspace + environment config schemas,
   ledger schema, story lifecycle state machine, dispatch-package contract.
-  No execution yet — the contracts everything else obeys.
+  No execution yet — the contracts everything else obeys. Storybook spike
+  continues.
 - **P2 — CLI read path + control plane.** `factory status/doctor`,
   controller/ledger/gates/renders ported genericized from the kit work;
   board sync (visibility first — Randy needs to SEE the work).
 - **P3 — Execution seam.** One adapter end-to-end (Hermes local first):
   dispatch → agent session → artifacts → evidence → transitions. Then the
-  cloud adapter (OC-2). Parameter-driven model routing from day one.
-- **P4 — Intake & Storybook.** Guided intake session, question flow,
-  wireframe generation + exposure to the user (screenshot → live link),
-  PRD generation. The hard UX nut (OC-6) gets its own spike early.
+  GitHub Actions cloud adapter (OC-2 ratified). Parameter-driven model
+  routing from day one. **P3 exit = dogfood cutoff (OC-5 ratified).**
+- **P4 — Intake & Storybook.** Guided intake session (harness-agnostic
+  protocol, Hermes first — OC-7 ratified), question flow, wireframe
+  generation + exposure to the user (screenshot → live link), PRD
+  generation. Builds on the P0/P1 spike results (OC-6 ratified).
 - **P5 — Demo end-to-end.** To-do app from plain description to deployed
   artifact through the full pipeline at Level 1/2. This is the "something
   working" bar for going public.
-- **P6 — Dogfood.** Factory builds factory features (cutoff per OC-5);
-  autonomy-level policy + metrics; onboarding hardening + fresh-repo
-  test-out; remaining adapters.
+- **P6 — Dogfood expansion.** Factory builds factory features (started at
+  P3 exit per OC-5); autonomy-level policy + metrics; onboarding hardening
+  + fresh-repo test-out; remaining adapters.
 - **P7 — Polish for open source.** Non-developer getting-started, fork-and-
   adapt demo, scripted onboarding, docs; flip public.
 
@@ -393,3 +402,9 @@ Locked by Randy's notes (no re-litigation without new direction):
 | 2026-10-18 | Sessions created mechanically via CLI, parameter-driven model selection |
 | 2026-09-28 | Ledger lives with the code; dispatch package = universal interface; human merge gate + Storybook approvals default; claim lock + fail-closed override; extract from prior work read-only |
 | 2026-09-06 | Cheapest sufficient model per role; frontier budget for meta-advice only; review gates owned by the factory, not platform bots |
+| 2026-11-14 | OC-1: keep old ai-software-factory repo, made PRIVATE (done); read-only salvage source, no archive |
+| 2026-11-14 | OC-2: cloud execution GitHub-native — Actions-backed agent sessions first, adapter seam for others |
+| 2026-11-14 | OC-4: autonomy levels = gate policy, one pipeline, measured promotion; Level 1 for factory's own build, Level 2 default for target repos after demo, Level 3 behind metrics + escalation contract |
+| 2026-11-14 | OC-5: dogfood starts at P3 exit (one story end-to-end by the factory, ledger intact); new features through factory, control-plane changes structured-vibe until review lane proven on itself |
+| 2026-11-14 | OC-6: Storybook intake spike early (P0/P1), screenshot-back first then live link, 2–3 model/adapter combos evaluated on a fixed script |
+| 2026-11-14 | OC-7: harness-agnostic intake protocol, Hermes chat first implementation; end-user surface decided after demo |
