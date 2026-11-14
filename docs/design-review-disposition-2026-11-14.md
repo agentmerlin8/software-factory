@@ -186,14 +186,31 @@ did not do (they tested consistency, by design). After OC-8…OC-11 close
 and the amendments fold, a **round-3 grill** verifies the amended sections
 in fresh context, cross-family.
 
-## Owner calls opened
+## Owner calls — RATIFIED (Randy, 2026-11-14)
 
-- **OC-8** — ledger write location (rec: dedicated ref + CAS + concurrency mutex)
-- **OC-9** — merge policy (rec: auto-merge green expand-only/flagged stories; human at feature-acceptance)
-- **OC-10** — escalation model (rec: deterministic decision classes + assumption log)
-- **OC-11** — primary persona (rec: engineer-primary through P6; touchpoint profiles)
+- **OC-8** — state lives OUT of the product repo in a **dedicated
+  factory-state repo that spans projects, structured as an Obsidian vault**
+  (JSONL ledger = machine truth; generated markdown = human view).
+  Supersedes "ledger lives with the code." Evidence bound by repo@sha
+  resolved against each product repo's object DB; CAS + per-story
+  concurrency mutex. Kept separate from the personal ~/Notes vault (sync
+  conflict). *One interpretation flagged, not blocking: read as a NEW state
+  repo, not literally inside ~/Notes — confirmed at round-3 grill.*
+- **OC-9** — **configurable**: merge policy (human-every-story /
+  auto-merge-green-expand-only-with-human-at-feature-acceptance /
+  full-auto-opt-in) **alongside Copilot review requirements (on/off) and
+  remediation mode**, per workspace, controller-enforced. Amends the old
+  blanket "Copilot review is never a gate" into a policy knob; the factory
+  still owns the gate.
+- **OC-10** — deterministic decision-class escalation + recorded-assumption
+  log with veto→rework (as recommended).
+- **OC-11** — **engineering professionals are the target audience**,
+  enabling people like Randy to build software autonomously. Supersedes
+  non-developer-first as the primary target; architecture/data-model/
+  decomposition approval gates first-class; touchpoints remain a profile.
 
-Recommendations recorded in docs/open-calls.md; awaiting Randy. Nothing
-in this disposition reverses a ratified OC-1…OC-7 decision; OC-9 amends
-the merge-gate granularity within OC-3/OC-4's policy framework, which is
-why it goes to the owner rather than being applied silently.
+All folded into docs/vision.md and docs/open-calls.md. Round-3 grill of the
+amended sections next. Nothing here reverses OC-1…OC-7; OC-8 deliberately
+supersedes the kit's ledger-location law (owner's call), and OC-9 amends
+merge granularity + the Copilot-review rule within OC-3/OC-4's policy
+framework.

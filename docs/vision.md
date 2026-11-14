@@ -1,15 +1,14 @@
 # Software Factory — Vision (consolidated 2026-11-14)
 
-Status: Vision APPROVED by grill rounds 1–2 (2026-11-14); **Fable 5.2
-external design review (issue #1) dispositioned same day** — accepted
-fixes folded here, four owner calls OPEN (OC-8 ledger location, OC-9 merge
-policy, OC-10 escalation model, OC-11 persona). Round-3 grill of the
-amended sections pending after the calls close. See
-[design-review-disposition-2026-11-14.md](design-review-disposition-2026-11-14.md),
+Status: Vision APPROVED by grill rounds 1–2; Fable 5.2 external design
+review (issue #1) dispositioned 2026-11-14; **all owner calls OC-1…OC-11
+RATIFIED by Randy 2026-11-14** (OC-8 state repo, OC-9 configurable
+merge/review/remediation policy, OC-10 decision-class escalation, OC-11
+engineer-primary persona). Round-3 grill of the amended sections pending.
+See [design-review-disposition-2026-11-14.md](design-review-disposition-2026-11-14.md),
 [grill-record-2026-11-14.md](grill-record-2026-11-14.md),
 [grill-disposition-2026-11-14.md](grill-disposition-2026-11-14.md),
 [grill-regrill-round2-2026-11-14.md](grill-regrill-round2-2026-11-14.md).
-OC-1…OC-7 ratified 2026-11-14.
 
 ## 1. Goal
 
@@ -17,11 +16,15 @@ Build software from **idea to deployable artifact autonomously, involving the
 human at the right steps** — the human answers what the AI cannot confidently
 answer on its own. (Randy, 2026-11-13)
 
-End state: a polished, open-source product where a **complete non-developer**
-can describe the software they want, answer guided clarification questions,
-watch the UI take shape as clickable wireframes, and receive working,
+End state: a polished, open-source product for **engineering professionals**
+— enabling people like Randy to build software autonomously, with the
+architecture kept in human hands (OC-11, ratified 2026-11-14; supersedes the
+earlier non-developer-first wording). Users describe the software they want,
+answer guided clarification questions, watch the UI take shape as clickable
+wireframes, approve the architecture and decomposition, and receive working,
 deployed software. Users bring their own model subscriptions; it runs at
-home, in a home lab, or in a corporate environment. (Randy, 2026-10-18)
+home, in a home lab, or in a corporate environment. (2026-10-18, amended by
+OC-11)
 
 Success looks like:
 
@@ -206,7 +209,7 @@ Code (TDD) → build + story tests green → adversarial code review on the
   │   2-loop cap → BLOCKED
   ▼
 Branch brought up to date with main → deterministic gates re-run on the
-  merge result → PR opened/updated → merge gate (granularity = OC-9)
+  merge result → PR opened/updated → merge gate (policy-configurable, OC-9)
   ▼
 main — trunk-based, squash, one commit per story   (RATIFIED OC-3)
   │   squash tree verified equal to the reviewed tree; evidence pinned by
@@ -251,15 +254,26 @@ the rewrite:
 ```
 software-factory repo        CLI · core agents · Intake Engine ·
                              skills/process rules · templates · adapters ·
-                             onboarding   (versioned)
-   └─ workspace              control home for a project: bindings + config +
-                             ledger + story records + dispatch packages
-        └─ target repo(s)    product code · story branches · PRs · CI
+                             onboarding   (versioned, the PROCESS)
+factory-state repo           dedicated control home, spans ALL projects;
+                             structured as an Obsidian vault
+   └─ workspace(s)           per project: bindings + config + ledger +
+                             story records + dispatch packages + renders
+        └─ target repo(s)    product code ONLY · story branches · PRs · CI
                              (evidence pinned as repo@sha)
 ```
 
 - **Factory repo** = this repo. One versioned home for the process; target
   repos are onboarded to it.
+- **Factory-state repo (OC-8, RATIFIED 2026-11-14)** = a DEDICATED repo,
+  separate from every product repo, that holds ALL factory state and spans
+  projects. Structured as an **Obsidian vault**: machine truth is the
+  append-only JSONL ledger; the human-facing view is generated markdown
+  (state.md / DASHBOARD.md / PROVENANCE.md / story records) browsable in
+  Obsidian. **State never lives in the product repo** — this supersedes the
+  kit's old "ledger lives with the code" law. Kept separate from the
+  personal ~/Notes vault so high-frequency machine writes don't fight its
+  Syncthing/cron sync.
 - **Intake Engine** = a stateful session manager, distinct from the
   fire-and-forget dispatch pipeline: it drives the question flow, Storybook
   wireframe generation, and PRD production, and owns the conversation state.
@@ -269,13 +283,17 @@ software-factory repo        CLI · core agents · Intake Engine ·
   URL), **LINK** (clickable URL), **SCREENSHOT** (static image fallback).
   The protocol queries harness capability and picks the best tier; Hermes
   targets LIVE, a plain terminal gets LINK/SCREENSHOT.
-- **Workspace** = control home; binds one or more target repos (stories can
-  span repos). Single-repo: control home in-repo (default `factory/`,
-  configurable via environment config); multi-repo: dedicated workspace
-  repo. Ledger lives with the product — always. **Self-host (dogfood):** the
-  factory builds itself using the single-repo pattern with its workspace at
-  `.factory/` (hidden, to avoid colliding with the product source tree);
-  ledger stories target the factory repo's own code.
+- **Workspace** = a project's control home INSIDE the factory-state repo;
+  binds one or more target repos (stories can span repos). Single-repo and
+  multi-repo projects both live in the state repo — there is no in-repo
+  control home anymore. **Self-host (dogfood):** the factory's own build is
+  just another workspace in the state repo whose target repo is the
+  software-factory repo itself; no special casing.
+- **Evidence binding across repos (OC-8)**: every ledger event pins
+  `repo@sha`; validation resolves each SHA against THAT product repo's
+  object database; provenance joins across the repo set. Atomicity comes
+  from pinning exact product SHAs, not from co-locating files. (This is the
+  accepted workspace-model v0.3 mechanism, now the universal default.)
 - **Environments** = where a workspace runs (this machine / cloud runner /
   client). Per-env config: runtime, dispatch mechanism, models per tier,
   credential refs, limits. Environments resolve HOW, never WHAT.
@@ -304,10 +322,27 @@ software-factory repo        CLI · core agents · Intake Engine ·
   never Actions artifacts (90-day expiry) and never dependent on
   `refs/pull/*` (not fetched by a fresh clone). Extends the proven
   review_context pattern (immutable base/reviewed SHAs + manifest digest).
-- **Ledger write location**: OPEN — OC-8 (recommendation: dedicated orphan
-  ref + git non-fast-forward rejection as compare-and-swap for appends and
-  claims; Actions concurrency group per story as the cloud mutex). Decided
-  before P1 freezes the ledger schema; the ledger never writes to main.
+- **Ledger write location (OC-8, RATIFIED)**: the ledger lives in the
+  dedicated factory-state repo (above), never in a product repo and never
+  on product main. Concurrency: git non-fast-forward rejection as
+  compare-and-swap for appends and claims; an Actions concurrency group per
+  story as the cloud mutex. The state repo absorbs the write traffic.
+- **Workspace policy config (OC-9, RATIFIED)**: per-workspace, frozen as
+  schema in P1, enforced by the controller —
+  - **merge policy**: (1) human-merges-every-story (Level 1 default for the
+    factory's own build); (2) auto-merge expand-only/flagged stories with
+    all gates green, human approves at feature-acceptance (recommended
+    production default once metrics earn it); (3) full auto-merge (explicit
+    opt-in only). Independent stories may proceed while another waits at a
+    gate, under any policy.
+  - **Copilot review requirements**: on/off per workspace. On = a Copilot
+    review is a REQUIRED input to the review gate (requested, waited on,
+    findings dispositioned like panel findings). Off (factory default) =
+    the factory's own fresh-context panel is the gate. The factory OWNS the
+    gate either way; a bot comment alone never merges anything.
+  - **remediation**: in-session coder fix loops (default) / separate
+    remediation dispatch / human-directed fixes; loop caps + tier
+    escalation per policy.
 - **Human approval anchoring (design review 1.3)**: "a human approved" is
   tied to a GitHub object the agent token cannot forge — a human PR
   review/merge, or an Actions environment with required reviewers. The
@@ -351,10 +386,11 @@ software-factory repo        CLI · core agents · Intake Engine ·
   comment/label commands (see Cloud execution); the ledger records the
   dispatch event only after the CLI receives it. The board triggers the
   action; the ledger remains the sole source of truth.
-- **Onboarding**: `factory init [--guided]` — creates the workspace, onboards
-  a target repo, generates an environment-config template, and validates the
-  setup with `factory doctor`. `--guided` asks setup questions interactively
-  for non-developers. Onboarding is scripted/mechanical first; the guide is
+- **Onboarding**: `factory init [--guided]` — creates the workspace in the
+  factory-state repo, onboards a target repo, generates an environment-config
+  template, and validates the setup with `factory doctor`. `--guided` asks
+  setup questions interactively (a lower-touch profile; the primary audience
+  is engineers, OC-11). Onboarding is scripted/mechanical first; the guide is
   an adapter, never the sole installer.
 - **Dependency policy**: agents may modify dependency manifests
   (package.json, requirements.txt, etc.) as part of story code; all
@@ -408,12 +444,14 @@ Distilled from five months of runs and studies. These survive the rewrite:
 8. **Slice sizing.** Stories are slices: ≤1 structural signal, ≤6 top-level
    ACs, independently mergeable, expand-first ordering. Stacked specs are
    intake defects.
-9. **Ledger = machine truth; repo = state.** Append-only events, evidence
-   SHAs validated against the object DB, corrections are events never
-   edits; sessions disposable, repo durable; push-per-gate; claim lock
-   (one owner per story, handover events, fail-closed human override file)
-   with **claim leases** (TTL + auto-renew + audited auto-release) so
-   ephemeral sessions never strand a claim.
+9. **Ledger = machine truth; the state repo = state.** Append-only events,
+   evidence SHAs validated against the product repo's object DB (pinned as
+   repo@sha), corrections are events never edits; sessions disposable,
+   state durable; push-per-gate to the dedicated factory-state repo (OC-8 —
+   supersedes "ledger lives with the code"); claim lock (one owner per
+   story, handover events, fail-closed human override file) with **claim
+   leases** (TTL + auto-renew + audited auto-release) so ephemeral sessions
+   never strand a claim.
 10. **A rule without a gate doesn't hold.** Enforcement > discipline;
     deterministic gates before LLM gates; checkers must be able to fail.
 11. **Human touchpoints stay** (until autonomy policy says otherwise):
@@ -434,7 +472,7 @@ Distilled from five months of runs and studies. These survive the rewrite:
     decomposition each get fresh-context review AND a human approval
     touchpoint (architecture, data model, decomposition) — the upstream
     stages where mistakes are most expensive. The touchpoint set is a
-    profile (primary persona = OC-11).
+    profile (primary persona = engineers, OC-11 ratified).
 16. **Requirements change safely (design review 2.6).** The PRD is
     versioned; a gate flags in-flight stories whose pinned acceptance
     criteria changed; amendments are recorded as DECs with re-pin or
@@ -460,14 +498,15 @@ RATIFIED (OC-4, 2026-11-14): levels are gate policy, one pipeline, measured
 promotion; details below.
 - Levels are **policy configuration**, not separate code paths: same
   pipeline, gate policy decides which transitions need a human actor.
-- Level 3 requires an escalation contract. **The confidence-threshold
-  formulation is superseded pending OC-10** (design review 2.3: model
-  self-reported confidence is poorly calibrated). Recommendation: escalate
-  by deterministic decision class (irreversible actions, scope change vs
-  PRD, new dependencies, security-sensitive paths, budget overrun, reviewer
-  disagreement); everything else proceeds on a recorded assumption, with a
-  human-reviewable assumption log and veto→rework. Questions reach the
-  human via the inbox (§3.4); BLOCKED first-class while waiting.
+- Level 3 escalation contract (OC-10, RATIFIED 2026-11-14): escalate by
+  **deterministic decision class**, checked by code — not self-reported
+  confidence (design review 2.3: model confidence is poorly calibrated).
+  Classes: irreversible actions, scope change vs PRD, new dependencies,
+  security-sensitive paths, budget overrun, reviewer disagreement; the
+  class list is extendable policy config. Everything else proceeds on a
+  **recorded assumption**; the human reviews the assumption log via the
+  inbox (§3.4) when convenient; a veto creates a rework story. BLOCKED
+  first-class while a question waits.
 - Autonomy is earned with data: per-level metrics (intervention rate, defect
   escape rate, cost) gate promotion. Level 3 for a repo/class of work is a
   measured decision, not a flag flip. **Promotion thresholds** (max
@@ -586,10 +625,14 @@ each phase ends in something demonstrable.
     stories) and feature-state computation rules (computed render; gate
     pass/fail are ledger events);
   - the **model-routing schema** (roles × tiers) and claim-lease semantics;
-  - workspace directory configuration (default `factory/`, self-host
-    `.factory/`);
-  - **ledger write location (OC-8)** + **schema version on every ledger
-    event from the first commit** (later changes are migrations);
+  - the **factory-state repo layout (OC-8)**: dedicated state repo as an
+    Obsidian vault, per-project workspaces, repo@sha evidence binding,
+    ledger CAS + per-story concurrency mutex; no in-repo control home;
+  - the **workspace policy schema (OC-9)**: merge policy (3 modes), Copilot
+    review requirements (on/off), remediation mode — all controller-enforced;
+  - the **escalation decision-class list + assumption-log schema (OC-10)**;
+  - **schema version on every ledger event from the first commit** (later
+    changes are migrations);
   - **evidence integrity**: tree-hash + SHA pinning, durable
     `refs/factory/*` evidence store, up-to-date-with-main + gate re-run
     before merge, squash-tree-equals-reviewed-tree check;
@@ -710,3 +753,7 @@ Locked by Randy's notes (no re-litigation without new direction):
 | 2026-11-14 | Design review (Fable 5.2, issue #1) accepted: evidence pinned by tree hash + SHA under durable refs/factory/*; up-to-date-with-main + gate re-run before merge; squash tree = reviewed tree; human approval anchored in unforgeable GitHub objects + CODEOWNERS + no-workflows agent token; threat model + dependency gate + egress allowlist + secret scanning (P1) |
 | 2026-11-14 | Design review accepted: dispatch trigger = /factory dispatch comment or factory:run label (App token); board drag-to-dispatch demoted to optional P6+ UX (projects_v2_item is org-only, not an Actions trigger — verified); factory inbox (P2); machine-vs-human cycle-time split + human-minutes-per-story headline metric; budget ceilings + factory pause; red-main auto-revert; tiered rework + contract-defect routing; upstream design/decomposition review gates; PRD versioning; maintained architecture doc; reduced-assurance review mode; hand-run story before P1 freeze; schema version from commit one |
 | 2026-11-14 | Design review OPEN owner calls: OC-8 ledger write location (rec: dedicated ref + CAS + concurrency mutex), OC-9 merge policy (rec: auto-merge green expand-only/flagged stories, human at feature-acceptance), OC-10 escalation model (rec: deterministic decision classes + assumption log), OC-11 primary persona (rec: engineer-primary through P6, touchpoint profiles) |
+| 2026-11-14 | OC-8 RATIFIED (Randy): state lives OUT of the product repo in a DEDICATED factory-state repo that spans projects, structured as an Obsidian vault (JSONL ledger = machine truth, generated markdown = human view); supersedes "ledger lives with the code"; evidence bound by repo@sha resolved against each product repo's object DB; CAS + per-story concurrency mutex; separate from the personal ~/Notes vault |
+| 2026-11-14 | OC-9 RATIFIED (Randy): merge policy CONFIGURABLE per workspace (human-every-story / auto-merge-green-expand-only-with-human-at-feature-acceptance / full-auto-opt-in), alongside configurable Copilot review requirements (on = required gate input; off = factory panel owns the gate) and configurable remediation mode; controller-enforced policy schema in P1 |
+| 2026-11-14 | OC-10 RATIFIED (Randy): deterministic decision-class escalation + recorded-assumption log with veto→rework; class list is extendable policy config |
+| 2026-11-14 | OC-11 RATIFIED (Randy): engineering professionals are the target audience — enabling people like Randy to build software autonomously; supersedes non-developer-first as the primary target; architecture/data-model/decomposition approval gates first-class; touchpoints remain a profile |

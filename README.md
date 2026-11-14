@@ -3,10 +3,10 @@
 Ground-up rewrite of the AI software factory: **idea → deployable artifact**,
 with the human involved at exactly the right steps.
 
-Status: Vision APPROVED by grill rounds 1–2; **Fable 5.2 external design
-review (issue #1) dispositioned 2026-11-14** — accepted fixes folded, four
-owner calls open (OC-8…OC-11). Private until the demo works end-to-end
-(P5 exit); then public.
+Status: Vision APPROVED by grill rounds 1–2; Fable 5.2 external design
+review (issue #1) dispositioned; **all owner calls OC-1…OC-11 ratified
+2026-11-14**. Round-3 grill of amended sections pending. Private until the
+demo works end-to-end (P5 exit); then public.
 
 ## What this is
 
@@ -21,8 +21,8 @@ CI/CD — involving the human only where the system cannot confidently decide.
 
 1. [docs/vision.md](docs/vision.md) — the consolidated vision (sources, goals,
    architecture, principles, measurement, roadmap).
-2. [docs/open-calls.md](docs/open-calls.md) — owner decisions: OC-1…OC-7
-   ratified 2026-11-14; OC-8…OC-11 open (from the design review).
+2. [docs/open-calls.md](docs/open-calls.md) — owner decisions: OC-1…OC-11
+   all ratified 2026-11-14.
 3. [docs/design-review-disposition-2026-11-14.md](docs/design-review-disposition-2026-11-14.md)
    — disposition of the Fable 5.2 external design review (issue #1).
 4. [docs/grill-record-2026-11-14.md](docs/grill-record-2026-11-14.md) — the
