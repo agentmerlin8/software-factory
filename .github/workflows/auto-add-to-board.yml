@@ -36,11 +36,9 @@ jobs:
           ITEM=$(gh api graphql -f query='mutation($p:ID!,$c:ID!){
             addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}' \
             -f p="$PROJECT_ID" -f c="$CONTENT_ID" --jq '.data.addProjectV2ItemById.item.id')
-          gh api graphql -f query="mutation {
-            updateProjectV2ItemFieldValue(input:{
-              projectId: \"$PROJECT_ID\", itemId: \"$ITEM\", fieldId: \"$STATUS_FIELD\",
-              value: { singleSelectOptionId: \"$BACKLOG_OPT\" }
-            }) { projectV2Item { id } }"
+          printf -v Q 'mutation { updateProjectV2ItemFieldValue(input:{ projectId:"%s", itemId:"%s", fieldId:"%s", value:{ singleSelectOptionId:"%s" } }) { projectV2Item { id } } }' \
+            "$PROJECT_ID" "$ITEM" "$STATUS_FIELD" "$BACKLOG_OPT"
+          gh api graphql -f query="$Q"
 
   mark-done:
     if: github.event.action == 'closed'
@@ -56,8 +54,6 @@ jobs:
             ... on PullRequest { projectItems(first:10){nodes{id}} } } }' \
             -f c="$CONTENT_ID" --jq '.data.node.projectItems.nodes[0].id // empty')
           [ -z "$ITEM" ] && exit 0
-          gh api graphql -f query="mutation {
-            updateProjectV2ItemFieldValue(input:{
-              projectId: \"$PROJECT_ID\", itemId: \"$ITEM\", fieldId: \"$STATUS_FIELD\",
-              value: { singleSelectOptionId: \"$DONE_OPT\" }
-            }) { projectV2Item { id } }"
+          printf -v Q 'mutation { updateProjectV2ItemFieldValue(input:{ projectId:"%s", itemId:"%s", fieldId:"%s", value:{ singleSelectOptionId:"%s" } }) { projectV2Item { id } } }' \
+            "$PROJECT_ID" "$ITEM" "$STATUS_FIELD" "$DONE_OPT"
+          gh api graphql -f query="$Q"
