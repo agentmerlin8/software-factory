@@ -3,10 +3,12 @@
 Ground-up rewrite of the AI software factory: **idea → deployable artifact**,
 with the human involved at exactly the right steps.
 
-Status: **VISION APPROVED — fully grilled** (rounds 1–2 consistency +
-Fable design review + round-3 feasibility + round-4 confirmation, 21/21).
-All owner calls OC-1…OC-11 ratified 2026-11-14. Cleared for backlog + P1.
-Private until the demo works end-to-end (P5 exit); then public.
+Status: Vision grilled (rounds 1–4) + two Fable external reviews
+dispositioned. **All owner calls OC-1…OC-16 ratified 2026-11-14.** Strategy
+per Fable review 2: **build with cuts** — a v1 walking skeleton + control
+arm replaces the contract-freeze-first roadmap; controller-writer security;
+update-before-review merge protocol; baseline/kill criterion. Next: build
+SKEL-1. Private until the demo works end-to-end; then public.
 
 ## What this is
 
@@ -20,18 +22,21 @@ CI/CD — involving the human only where the system cannot confidently decide.
 ## Read order
 
 1. [docs/vision.md](docs/vision.md) — the consolidated vision (sources, goals,
-   architecture, principles, measurement, roadmap).
-2. [docs/open-calls.md](docs/open-calls.md) — owner decisions: OC-1…OC-11
+   architecture, principles, measurement, walking-skeleton roadmap).
+2. [docs/open-calls.md](docs/open-calls.md) — owner decisions: OC-1…OC-16
    all ratified 2026-11-14.
-3. [docs/design-review-disposition-2026-11-14.md](docs/design-review-disposition-2026-11-14.md)
-   — disposition of the Fable 5.2 external design review (issue #1).
-4. [docs/grill-record-2026-11-14.md](docs/grill-record-2026-11-14.md) — the
-   round-1 vision grill (findings, verdict, owner-decision list).
-5. [docs/grill-disposition-2026-11-14.md](docs/grill-disposition-2026-11-14.md)
-   — how every grill finding was dispositioned in the fix pass.
-6. [docs/grill-regrill-round2-2026-11-14.md](docs/grill-regrill-round2-2026-11-14.md)
-   — the round-2 re-grill (APPROVE, 37/37 verified).
-7. [docs/lineage.md](docs/lineage.md) — what we keep from the prior factory
+3. [docs/design-review-2-disposition-2026-11-14.md](docs/design-review-2-disposition-2026-11-14.md)
+   — disposition of Fable review 2 (issue #2): build with cuts, OC-12…16.
+4. [docs/design-review-disposition-2026-11-14.md](docs/design-review-disposition-2026-11-14.md)
+   — disposition of Fable review 1 (issue #1).
+5. [docs/grill-round4-2026-11-14.md](docs/grill-round4-2026-11-14.md) —
+   round-4 confirmation (APPROVE, 21/21).
+6. [docs/grill-round3-2026-11-14.md](docs/grill-round3-2026-11-14.md) —
+   round-3 feasibility grill (approve_with_fixes).
+7. [docs/grill-record-2026-11-14.md](docs/grill-record-2026-11-14.md) +
+   [grill-disposition](docs/grill-disposition-2026-11-14.md) +
+   [round-2 re-grill](docs/grill-regrill-round2-2026-11-14.md) — rounds 1–2.
+8. [docs/lineage.md](docs/lineage.md) — what we keep from the prior factory
    work and what we scrap.
 
 ## Lineage

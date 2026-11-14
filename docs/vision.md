@@ -1,11 +1,13 @@
 # Software Factory — Vision (consolidated 2026-11-14)
 
-Status: **VISION APPROVED — fully grilled.** Rounds 1–2 (consistency)
-APPROVE; Fable 5.2 external design review (issue #1) dispositioned; all
-owner calls OC-1…OC-11 RATIFIED 2026-11-14; round-3 feasibility grill
-approve_with_fixes (48/100) → fix pass applied; **round-4 confirmation
-APPROVE (21/21 verified, 0 failures, 2 minor clarifications folded)**.
-Cleared for backlog decomposition + P1. See
+Status: Vision grilled rounds 1–4 + Fable review 1 (issue #1) dispositioned;
+OC-1…OC-11 ratified. **Fable review 2 (issue #2) dispositioned and ratified
+as OC-12…OC-16 (2026-11-14): build with cuts — v1 walking skeleton + control
+arm replaces the P1 freeze; controller-writer security; update-before-review
+merge protocol; baseline/kill criterion.** The roadmap (§11) is now
+walking-skeleton-first; the full architecture (§5) is the north star. Next:
+build SKEL-1 (walking skeleton + control arm). See
+[design-review-2-disposition-2026-11-14.md](design-review-2-disposition-2026-11-14.md),
 [grill-round4-2026-11-14.md](grill-round4-2026-11-14.md),
 [grill-round3-2026-11-14.md](grill-round3-2026-11-14.md),
 [design-review-disposition-2026-11-14.md](design-review-disposition-2026-11-14.md),
@@ -260,6 +262,13 @@ exceed the policy's confidence always reach a human.
 
 ## 5. Architecture sketch
 
+> **v1 scope note (OC-12…OC-16):** this section describes the FULL
+> architecture (north star). v1 builds only the walking-skeleton subset
+> (§11): local execution, one adapter, mode-1 human merges, person scope,
+> controller-writer security, update-before-review merge protocol, no
+> leases/cloud/mining/multi-repo. Items marked CUT or "north star" are not
+> built in v1. Read §11 for what actually gets built first.
+
 Carried from the accepted workspace model (v0.3) + kit vision, adapted to
 the rewrite:
 
@@ -342,35 +351,36 @@ factory-state repo           dedicated control home, spans ALL projects;
   stories merged + acceptance gate passed = feature done); feature-level
   gate events (acceptance-pass / acceptance-fail) ARE first-class ledger
   events for audit. Story events remain the only state-driving events.
-- **Evidence integrity (design review 1.1; round-3 2.1/2.2/2.3)**: evidence
-  is pinned by **tree hash AND commit SHA**. The merge-integrity protocol
-  resolves the round-1 "squash tree = reviewed tree" vs "up to date with
-  main" contradiction by reviewing the MERGE RESULT, not the bare branch:
-  1. After build + story tests green, compute the merge-result tree with
-     `git merge-tree --write-tree <branch> main` (plumbing; touches neither
-     working tree nor index — verified).
-  2. The adversarial review runs on THAT merge-result tree. The ledger
-     records `reviewed_tree` (the merge-result tree reviewed) and the
+- **Evidence integrity (OC-15 RATIFIED — supersedes the merge-tree
+  protocol)**: evidence is pinned by **tree hash AND commit SHA**. The
+  merge-integrity protocol is **update-before-review + the platform's own
+  guarantee** (Fable MRG-2/MRG-3; replaces the round-3 `git merge-tree`
+  mechanism, which left the merged tree untested and the post-merge revert
+  without an authorized identity):
+  1. Merge main INTO the story branch **before** review. Run the build, the
+     story's tests, AND the adversarial review on that branch head — a real
+     commit CI can run on (this is what tests the merged tree).
+  2. The ledger records `reviewed_tree` (the branch-head tree reviewed) and
      `review_context` (base/reviewed SHAs + manifest digest).
-  3. Before merge, verify main has not advanced past the reviewed merge
-     base; if it has, recompute merge-tree and re-review. **No rebase after
-     review.** Git's non-fast-forward push protection is a second pre-merge
-     guard.
-  4. Merge via GitHub PR (squash). GitHub's squash-merge independently
-     computes the merge result from the PR branch's commits; for a clean
-     merge this produces the same tree as `git merge-tree` (same diff, same
-     base) — that equivalence is why the check works (round-4 N1).
-  5. **Post-merge verification**: `merge_tree == squash_tree`. A mismatch
-     (e.g. main advanced between the step-3 check and the merge — a TOCTOU
-     window, round-4 N2) triggers **auto-revert + story reopen**, treated as
-     a detected anomaly, then recompute + re-review. The exact pre/post
-     sequence is frozen in the P1 evidence-integrity contract. The ledger
-     links `reviewed_tree → review_context → merge_tree → squash_commit`.
+  3. Enable **"require branches to be up to date before merging."** GitHub
+     refuses the merge if main has moved; the squash tree then equals the
+     reviewed head tree **by construction** — no race, no rebase-after-
+     review. (VERIFY the strict setting + server-side squash equivalence on
+     one real PR, incl. a rename + line-ending case, before relying on it.)
+  4. Re-review only when the story's own diff changed or main's delta
+     touches the story's manifest; otherwise re-run deterministic gates
+     only (avoids quadratic re-review, Fable MRG-5).
+  5. A **post-merge tree comparison is a cheap ALARM, not a control.** On
+     mismatch or red main: block new dispatches and put a **prepared revert
+     PR in the inbox** as a one-click human decision (no auto-revert — no
+     agent identity is authorized to push to protected main, Fable MRG-4).
   Evidence refs live under a durable `refs/factory/*` namespace — never
   Actions artifacts (90-day expiry), never `refs/pull/*` (not fetched by a
-  fresh clone). `factory init` configures the fetch refspec in each product
-  repo (`git config --add remote.origin.fetch '+refs/factory/*:refs/factory/*'`);
-  ledger tooling does targeted `git fetch origin '+refs/factory/<story>/*'`.
+  fresh clone). NOTE (Fable SEC-5): `refs/factory/*` cannot be protected by
+  rulesets (they target branches/tags) and private-repo protection needs a
+  paid plan; durability is therefore enforced by the **controller-writer
+  model** (below), not by ref protection. `factory init` configures the
+  fetch refspec; ledger tooling does targeted `git fetch`.
 - **Cross-repo evidence validation (OC-8; round-3 1.1/1.4)**: the ledger is
   in the state repo, the code/evidence in product repos. Validation
   protocol: (1) read the ledger entry's `repo@sha`; (2) ensure the product
@@ -382,17 +392,29 @@ factory-state repo           dedicated control home, spans ALL projects;
   `factory doctor --deep` checks all ledger SHAs still resolve (detects
   product force-push dangling refs); board sync spot-checks recent story
   SHAs. Force-push detection is visibility/audit, not a hard gate.
-- **Ledger write location + layout (OC-8, RATIFIED; round-3 1.2/5.2)**: the
-  ledger lives in the dedicated factory-state repo, never in a product repo
-  and never on product main. **Per-story ledger files**
-  (`workspaces/<name>/ledger/stories/<story-id>.jsonl`) — chosen so different
-  stories NEVER contend on append; only same-story writes collide, and the
-  per-story Actions concurrency group already serializes those. A
-  per-workspace index/rollup is a derived render, not a write target.
-  Concurrency within a story: git non-fast-forward rejection as
-  compare-and-swap; the CLI retries a rejected push up to 3× with
-  exponential backoff (1s/2s/4s); exhaustion → BLOCKED with `cas-contention`
-  reason surfaced in the inbox. The state repo absorbs the write traffic.
+- **Ledger write location + layout (OC-8 + OC-14 RATIFIED)**: the ledger
+  lives in the dedicated factory-state repo, never in a product repo and
+  never on product main. **Per-story ledger files**
+  (`workspaces/<name>/ledger/stories/<story-id>.jsonl`) organize the data;
+  a per-workspace index/rollup is a derived render, not a write target.
+  **CORRECTION (Fable MRG-1, reproduced):** per-story files do NOT remove
+  push contention — git's non-fast-forward rejection is per-REF, not per-
+  file, so all appends to one branch still race. Contention is solved by the
+  **controller-writer model**, not the file layout:
+  - **Agents never hold a write token to the state repo.** An agent job
+    emits its results as an artifact or a branch in the PRODUCT repo. A
+    separate **controller job** — runs no model output and no product code —
+    validates and appends to the state repo. (OC-14 / Fable SEC-1.)
+  - **A single controller writer**, serialized by one concurrency group, is
+    the only thing that pushes to the state repo. This eliminates cross-
+    story contention by construction and removes the agent's ability to
+    forge gate events or rewrite policy/ledger.
+  - Policy config changes only by human-reviewed PR; force-push blocked on
+    state main. This works on the Free plan — it does not depend on branch
+    protection (Fable SEC-5; org is Free, private-repo protection returns
+    403 — verified).
+  - The earlier "3× backoff CAS retry" is retained only as the controller's
+    own push-retry hygiene, not as a multi-writer contention scheme.
 - **Workspace policy config (OC-9, RATIFIED)**: per-workspace, frozen as
   schema in P1, enforced by the controller —
   - **merge policy**: (1) human-merges-every-story (Level 1 default for the
@@ -417,7 +439,7 @@ factory-state repo           dedicated control home, spans ALL projects;
     isn't blocked waiting for a review the policy says isn't needed.
     (GitHub hard-blocks self-approval — an author can't approve its own PR —
     so requiring a review on agent-authored PRs would deadlock auto-merge.)
-- **Human approval anchoring (design review 1.3; round-3 3.1/3.2)**: "a human
+- **Human approval anchoring (OC-14 RATIFIED — two identities)**: "a human
   approved" is tied to a GitHub object the agent identity cannot forge. Two
   DISTINCT mechanisms, mapped to distinct gates:
   - **Code-merge gate** → a human PR review/merge by a human account.
@@ -425,18 +447,26 @@ factory-state repo           dedicated control home, spans ALL projects;
     (a human approves before an agent session runs against a protected
     environment, e.g. production deploy or a Level 2→3 transition).
   The ledger records a reference; a gate verifies it through the API.
-  **Concrete agent token boundary (frozen in the P1 threat model):** the
-  factory App is granted `contents: write`, `pull_requests: write`
-  (create/update PRs), `issues: write` (board sync + inbox mentions),
-  `metadata: read` — and **no `workflows` permission**. The App identity is
-  **never a required approver** and is **never listed in CODEOWNERS**;
-  CODEOWNERS lists only human handles and is itself branch-protected (the
-  App cannot push to it on main). GitHub's hard self-approval block backs
-  this: the agent authors the PR, so it cannot approve it. Control-plane
-  paths (`.github/workflows/`, gate catalog, autonomy policy, override file)
-  are CODEOWNERS + branch-protection guarded. The proven human-only
-  comment-gate pattern (positive-only actor trust) ports from the reference
-  implementation as the command surface, with this anchoring underneath.
+  **Two identities (Fable SEC-2):** an **agent App** (push story branches,
+  open/update PRs) and a **controller App** (post status checks, merge).
+  The controller key NEVER appears in a job that runs model output or
+  product code. The agent App is granted `contents: write`,
+  `pull_requests: write`, `issues: write`, `metadata: read` — and **no
+  `workflows` permission** and **no `checks: write`** (so it cannot mint its
+  own required check — that was self-approval moved into modes 2/3). The
+  agent identity is **never a required approver** and **never in
+  CODEOWNERS**; CODEOWNERS lists only human handles.
+  **Free-plan caveat (Fable SEC-4/SEC-5, verified):** branch protection /
+  rulesets on private repos need a paid plan (org is Free → 403), and
+  "require a human reviewer" is not directly enforceable (GITHUB_TOKEN can
+  approve if the Actions setting is on; `pull_requests: write` does not
+  sub-scope create-vs-approve). Therefore the **controller checks the
+  reviewer against a human allowlist before merging**, the Actions
+  approval setting is OFF, and agent jobs run `permissions: {}`. Security
+  rests on the controller-writer model + identity separation, NOT on
+  branch protection. Control-plane paths (workflows, gate catalog, policy,
+  prompts, controller, override file) are CODEOWNERS-guarded and changes
+  land only by human-reviewed PR.
 - **Security posture (design review 1.4; round-3 3.3/3.4)**: a threat model
   is a P1 deliverable. Keys are scoped per job. **Egress allowlist is
   deferred to P6** (Randy, 2026-11-14): GitHub-hosted runners cannot filter
@@ -451,16 +481,28 @@ factory-state repo           dedicated control home, spans ALL projects;
   3.4): a deterministic gate in the agent's coding session before the branch
   push (gitleaks/trufflehog, tool frozen in P1) — secrets never reach
   GitHub; detection fails the gate and the agent remediates.
-- **Claim leases (round-3 5.5)**: every claim carries a TTL (default 30m
-  cloud, 10m local), auto-renewed by the holding process; an expired claim
-  auto-releases with an audit event, so a dead ephemeral session never holds
-  a story hostage. Split-brain guards: (1) renewal runs on a background
-  timer, independent of the main agent loop yielding; (2) before EVERY
-  side-effect operation (branch push, PR open/update) the job re-checks its
-  lease in the ledger and fails immediately with `lease-expired` if lost;
-  (3) the effective TTL includes a grace period (TTL + 2× renewal interval)
-  for clock skew. The fail-closed human override file remains the emergency
-  release, not the normal path.
+  **Agent-text injection surfaces (Fable SEC-6):** agent-written text
+  reaches privileged readers in four places, each contained — (1) decision
+  cards are rendered by the controller from structured fields, agent free
+  text quoted + capped, evidence links computed by the controller; (2) the
+  comment command surface parses commands from HUMAN actors only (an agent
+  cannot `/factory dispatch` itself); (3) Obsidian renders escape all agent
+  text (remote-image/plugin exfil); (4) mining output goes to humans +
+  statistics only — anything entering a dispatch package is human-promoted
+  and pinned. **Dependency gate covers transitive deps** (Fable SEC-9):
+  lockfile-diff gate + install with scripts disabled, not just top-level
+  existence/age/licence. **Token + untrusted code separation (Fable SEC-3):**
+  the agent token is scoped to the single product repo; the push happens in
+  a separate step consuming a patch; per-workspace model key with a
+  provider-side spend cap.
+- **Claim leases — CUT from v1 (OC-13; Fable MRG-7)**: v1 has one operator
+  locally and job timeouts + the controller's concurrency group in the
+  cloud, so leases are unnecessary. The lease check was also not a true
+  fence (check-then-act across two repos isn't atomic; TTL clock
+  unspecified). If leases return post-v1, fence on the product branch with
+  `git push --force-with-lease=<branch>:<expected-sha>`, not on a state-repo
+  lease record. (The full design retains the earlier TTL/renewal/grace
+  semantics as a north-star reference only.)
 - **Cloud execution**: GitHub Actions–backed agent sessions (RATIFIED
   OC-2, 2026-11-14): the CLI triggers a workflow running an agent in a
   container with repo-scoped credentials. Agent jobs use a **GitHub App
@@ -685,154 +727,130 @@ selection can be tuned on data.
   review-finding severity distribution, first-try pass rate, defect escapes
   post-merge, human-intervention count, blocked-time. **"Human minutes per
   merged story" is a headline metric alongside cost** — it measures whether
-  the factory actually frees the human.
-- **Budgets are enforced, not just measured (design review §3)**: hard
-  ceilings per dispatch, story, feature, and day as stop rules; a retry
-  budget for platform failures; job timeouts; and a `factory pause` kill
-  switch. The two-loop cap covers review loops, not an agent stuck inside
-  one session — the ceilings do.
+  the factory actually frees the human. **"Process overhead ratio"
+  (non-coder tokens / coder tokens) is a headline metric (OC-16 / Fable
+  ECN-1)** — it exposes whether the process itself is the cost driver.
+- **Budgets are enforced, not just measured (OC-16 / Fable ECN-2)**: the
+  enforcement point is the CONTROLLER, not the agent's self-report. Real
+  controls: a **provider-side spend cap on a per-workspace model key**,
+  `timeout-minutes` on every job, and a **controller that refuses to
+  dispatch when the ledger total has reached the ceiling**. Ceiling values
+  live in human-reviewed policy config (not agent-writable). A retry budget
+  for platform failures and a `factory pause` kill switch round it out. The
+  two-loop cap covers review loops, not an agent stuck inside one session —
+  the timeouts + ceilings do. (Self-reported token counts are recorded but
+  are NOT the enforcement mechanism.)
 - **The statistics view**: `factory stats` (CLI) + a rendered dashboard in
-  the repo, plus board fields (Tokens/cost, Model(s) used, Cycle time) so
-  the numbers are visible where the work is. Per-model and per-role
+  the STATE repo, plus board fields (Tokens/cost, Model(s) used, Cycle time)
+  so the numbers are visible where the work is. Per-model and per-role
   breakdowns are the tuning surface: which model is cheapest-sufficient for
   which role, where loops concentrate, where cycle time hides.
-- **Schema frozen in P1, metering live in P3, dashboard polished with the
-  demo (P5).** Baseline frozen before any efficiency change; a change is
-  KEPT only if the target metric moves and reasoning-class loops don't rise.
+- **Metrics that gate promotion/routing are gameable (Fable ECN-3) —
+  countermeasures:** intervention rate falls when agents record assumptions
+  instead of escalating, so track assumption-debt alongside it; defect-
+  escape needs real users (a demo has none) so promotion rests on seeded-
+  defect catch-rate, not absence of escapes; **seeded-defect reviewer
+  calibration moves to v1/P3 (before routing starts), not P6**; routing
+  selects lenient reviewers unless catch-rate is measured; the test-gaming
+  gate uses a separate test-author dispatch or mutation score, not a trivial
+  assertion count.
+- **Schema v0 in the walking skeleton, metering live from the first story,
+  dashboard polished with the demo.** Baseline frozen before any efficiency
+  change; a change is KEPT only if the target metric moves and reasoning-
+  class loops don't rise.
 - Cost stays tokens + a versioned price table until that table is trusted;
   dollars are derived, never invented.
 
-## 11. Roadmap (candidate phases)
+## 11. Roadmap — v1 walking skeleton first (OC-12…OC-16 ratified)
 
-Candidate phases — order follows the accepted declarative-first principle;
-each phase ends in something demonstrable.
+**Strategy (Fable review 2, ratified 2026-11-14):** do NOT freeze ~25
+contracts before anything executes. Build a **minimum factory (v1)** and
+run **5 real to-do stories** through it locally, with a **control arm**, to
+test the three risky hypotheses: (1) an agent under these contracts
+produces mergeable stories at tolerable cost; (2) intake produces a PRD an
+engineer approves; (3) fresh-context cross-family review catches defects a
+single session misses. Contracts are **v0** (schema-versioned, expected to
+change); freeze only after ~10 real stories. The full vision below the v1
+line is the north star, not the build order.
 
-- **P0 — Vision & contracts (now).** Vision grilled and approved; feature
-  backlog + board created (lane-per-state schema, §3); repo scaffolding.
-  Storybook spike (OC-6, ratified) starts here as **throwaway exploration**:
-  hardcoded setup, fixed conversation script, output = model/adapter
-  evaluation data, not reusable code. P4 builds the real intake on P1
-  schemas, informed by the spike. **Two pre-freeze validations (round-3
-  6.2):** (1) run one story through by hand with the human adapter
-  (exercises story schema, transition catalog, evidence integrity); AND
-  (2) a **concurrency smoke test** — two independent stories dispatched
-  simultaneously against the same target repo with the state repo separate
-  (exercises per-story ledger CAS, claim leases, cross-repo evidence). A
-  single-story hand-run cannot catch contention or cross-repo bugs; both
-  must pass before P1 freezes. Hand-run with two terminal sessions suffices.
-- **P1 — Declarative core.** Workspace + environment config schemas,
-  ledger schema (incl. measurement fields, §10), story lifecycle state
-  machine, dispatch-package contract. No execution yet — the contracts
-  everything else obeys. **No specification shell may freeze (round-3
-  6.1):** every contract below ships with a concrete example + data schema
-  + validation rule in pseudocode before freeze; a name with no internals
-  is not a frozen contract. P1 must freeze:
-  - the **complete transition catalog**: every state → event → next-state
-    tuple tagged with gate type (none | deterministic | llm-review |
-    human-approval) and autonomy-level override rules (which levels skip
-    the human); ships with sample tuples covering the happy path + each
-    failure/escalation path;
-  - the **story schema**: id, feature ref, ACs anchored to the PRD (with
-    PRD version pin), structural-signal count, dependencies (for inbox
-    ordering), target repo, state;
-  - the **story failure lifecycle**: rework loop (tiered), 2-loop cap,
-    BLOCKED, human/authorized-agent disposition paths (accept / re-scope /
-    amend-spec / retry-higher-tier / reject);
-  - the **feature-acceptance failure path** (BLOCKED + auto-created fix
-    stories) and feature-state computation rules (computed render; gate
-    pass/fail are ledger events);
-  - the **model-routing schema** (roles × tiers) and claim-lease semantics
-    (background renewal, pre-side-effect lease check, grace period);
-  - the **factory-state repo layout (OC-8)**: dedicated state repo as an
-    Obsidian vault, the exact directory tree (`workspaces/<name>/` +
-    `ledger/stories/<story-id>.jsonl` + shared `templates/`), bootstrap +
-    discover/join procedure, repo@sha cross-repo evidence validation
-    protocol, per-story ledger CAS + retry/backoff, per-story concurrency
-    mutex; no in-repo control home; **scope/ownership model (person | team |
-    organization)** bound to GitHub permissions, validated by `factory
-    doctor`;
-  - the **workspace policy schema (OC-9)**: merge policy (3 modes) + the
-    branch-protection ruleset per mode, Copilot review requirements (on/off),
-    remediation mode — all controller-enforced;
-  - the **escalation decision-class list + assumption-log schema (OC-10)**;
-  - **schema version on every ledger event from the first commit** (later
-    changes are migrations);
-  - **evidence integrity**: the merge-tree protocol (compute merge-result
-    tree → review it → no rebase after review → squash tree = reviewed
-    merge-result tree), two-tree pinning (`reviewed_tree`/`merge_tree`),
-    durable `refs/factory/*` store + fetch-refspec config, cross-repo
-    validation + force-push liveness check;
-  - **human approval anchoring** (the exact App permission set; App never a
-    required approver / never in CODEOWNERS; human-only CODEOWNERS +
-    branch protection; no-`workflows` token; code-merge vs agent-dispatch
-    gate mechanisms) and the **threat model** (per-job keys, dependency
-    gate, pre-push secret scanning + tool choice, dispatch authority,
-    egress-allowlist accepted-risk posture for P3 + P6 hardening path);
-  - **budget ceilings** as stop rules; **idempotent-replay semantics**
-    (idempotency-key format, upsert targets = branch/PR/issue keyed by
-    dispatch id, reset-to-pinned-base procedure); **process + prompt version
-    sealed into dispatch identity**; **flag registry + lifecycle**; **PRD
-    versioning mechanism + changed-criteria gate algorithm**; **test-gaming
-    gate** (the diff algorithm + baseline: deleted tests / new skips / fewer
-    assertions fail; AC→named-test traceability); **reduced-assurance review
-    mode**; the maintained **architecture + conventions doc**; **inbox
-    ordering** (blocked_count over the dependency DAG).
-  Storybook spike continues.
-- **P2 — CLI read path + control plane.** `factory status/doctor` (incl.
-  `--deep` SHA-liveness check), controller/ledger/gates/renders ported
-  genericized from the kit work; board sync (visibility first — Randy needs
-  to SEE the work); one-way ledger→board mirror with the sync tool as sole
-  writer + `factory board reconcile`; **`factory inbox`** (decision cards,
-  blockage-ordered, pushed via GitHub mentions). **Board write fallback
-  (round-3 5.4):** Projects V2 GraphQL field writes need org-level project
-  scope; `factory board sync` detects writability and falls back to issue
-  labels + body for Stage tracking where unavailable — custom fields are
-  best-effort, the ledger records them regardless.
-- **P3 — Execution seam.** One adapter end-to-end (Hermes local first):
-  dispatch → agent session → artifacts → evidence → transitions. Then the
-  GitHub Actions cloud adapter (OC-2 ratified), per-step dispatch with
-  ledger checkpoints + claim leases, App-token events, comment/label
-  dispatch trigger. Parameter-driven model routing from day one; metering
-  live (§10); budget enforcement live. **State-repo reachability (round-3
-  1.5):** push failures retry 3×; exhaustion → job fails with
-  `state-repo-unreachable`, dispatch replayable. **Deployability guard:** CI
-  on every main push runs build + smoke tests; red main = BLOCKED new
-  dispatches until green, and **the offending commit is auto-reverted with
-  its story reopened** (design review §3 — red main has an owner).
-  Architecture + conventions doc updated by a merge gate. Egress allowlist
-  NOT enforced here (accepted risk, §5); per-job key scoping + pre-push
-  secret scanning are the compensating controls. **P3 exit = dogfood cutoff
-  (OC-5 ratified).**
-- **P4 — Intake & Storybook.** Guided intake session (harness-agnostic
-  protocol, Hermes first — OC-7 ratified), question flow, wireframe
-  generation + exposure to the user via the LIVE/LINK/SCREENSHOT tiers,
-  PRD generation; intake engine auto-creates feature items on the board.
-  Builds on the P0/P1 spike results (OC-6 ratified).
-- **P5 — Demo end-to-end.** To-do app from plain description to deployed
-  artifact through the full pipeline at Level 1/2, in the separate demo
-  repo. Factory generates a baseline CI config (build/test/lint) for the
-  target repo; live proof = automated post-deploy evidence; flag-cleanup
-  stories auto-created on feature acceptance. Statistics dashboard
-  polished. **P5 exit = repo goes PUBLIC** (Randy, 2026-11-14) —
-  "something working" is the bar.
-- **P6 — Dogfood expansion.** Factory builds factory features (started at
-  P3 exit per OC-5); autonomy-level policy + metrics; **Level-3 promotion
-  thresholds defined here** (no activation without data from ≥3 features);
-  onboarding hardening + fresh-repo test-out; remaining adapters
-  (priority: api-direct, claude-code, codex, copilot-cli; the human adapter
-  exists from P2 as the CLI itself); **factory regression suite** (fixed
-  stories with known outcomes, replayed before any process change) and
-  **reviewer catch-rate calibration** (seeded-defect runs); optional board
-  drag-to-dispatch UX (org board + App webhook relay) if still wanted.
-- **P6+ — State-vault mining.** Tools that mine the factory-state vault to
-  show **how things were built**: provenance queries, decision history,
-  recurring patterns, cost/cycle trends across projects and scopes. Built on
-  the generated markdown + ledger; feeds §10 statistics and the "how was
-  this built" story. Scope-aware (person/team/org). A capability on top of
-  the state substrate, not a blocker to the pipeline.
-- **P7 — Public polish.** Engineer-focused getting-started, fork-and-adapt
-  demo, scripted onboarding, docs. The repo is already public since P5;
-  this phase polishes what is public.
+### v1 — the minimum factory that proves the thesis (OC-13 cuts applied)
+
+- **SKEL-1 — Walking skeleton + control arm (the first build).** One repo;
+  JSONL ledger on a branch or local dir; **local execution only, one
+  adapter**; one coder + one cross-family reviewer; **human merges every
+  PR (mode 1)**; one design document with one approval; inbox = GitHub
+  issues with a label + assignee; provider-side spend cap. Run 5 to-do
+  stories. **Control arm:** build the same 5 with a single coding-agent
+  session; compare human-minutes, escaped defects, cost. **Kill criterion
+  (OC-16): if the factory doesn't win on human-minutes or defects at a cost
+  multiple Randy accepts, STOP and reconsider.** Record tokens/wall/human-
+  minutes per story; "process overhead ratio" (non-coder/coder tokens) is a
+  headline metric.
+- **SKEL-2 — Intake spike (pulled forward — highest product risk).** Guided
+  intake → one design doc → local Storybook URL (no LIVE/SCREENSHOT tiers).
+  Test with engineers who are not the owner: do they approve the PRD, how
+  long does it take. (OC-6 spike informs this.)
+- **SKEL-3 — Controller-writer security (OC-14).** Agents never hold a
+  state-repo write token; agent emits results to the product repo; a
+  separate controller job (no model output, no product code) validates +
+  appends. Two identities (agent App / controller App). Single controller
+  writer serialized by one concurrency group (fixes ledger contention,
+  MRG-1). Policy changes only by human-reviewed PR. Works on the Free plan
+  — no branch-protection dependency.
+- **SKEL-4 — Merge protocol (OC-15).** Merge main into the story branch
+  BEFORE review; tests + review on that head; "require branches up to date
+  before merging"; squash tree = reviewed head by construction. No
+  merge-tree protocol, no post-merge auto-revert. Post-merge tree compare
+  is a cheap alarm only; red main → block dispatches + prepared revert PR
+  in the inbox. Re-review only when the story's diff changed or main's
+  delta touches its manifest. VERIFY on one real PR (rename + line-ending).
+- **SKEL-5 — Measurement + seeded-defect calibration.** Meter every
+  dispatch; seeded-defect reviewer catch-rate test moved here (before
+  routing), not deferred. Risk-tier the pipeline: small stories skip plan
+  review, one reviewer.
+
+**v1 explicitly CUTS (OC-13):** cloud adapter; merge modes 2/3 + Level 3;
+claim leases; team/org scope (person only, one state repo per trust
+boundary); state-vault mining; multi-repo stories; flag registry; board
+lane-per-state + custom fields (→ labels); LIVE/SCREENSHOT wireframe tiers
+(→ local URL); Copilot-review knob + remediation modes; PRD-versioning
+gate, reduced-assurance mode, regression suite (add on first real case);
+four upstream design approvals (→ one); Obsidian renders beyond one status
+file.
+
+### North star — the full vision (post-v1, evidence-gated)
+
+Each item below returns only when v1 evidence justifies it. Order is
+indicative, not a freeze.
+
+- ** Declarative core (v0 → frozen).** Transition catalog, story schema,
+  failure lifecycle, feature-state computation, model-routing schema,
+  state-repo layout + scope model, workspace policy schema, escalation
+  classes + assumption log, evidence integrity, approval anchoring + threat
+  model, budget ceilings, idempotent replay, test-gaming gate, inbox
+  ordering. **No specification shell freezes** — each ships with example +
+  schema + pseudocode; freeze after ~10 real stories, not before.
+- **CLI read path + control plane.** `factory status/doctor` (+ `--deep`
+  SHA liveness), controller/ledger/gates/renders, board sync + reconcile,
+  `factory inbox` (blockage-ordered decision cards). Board write falls back
+  to labels where Projects V2 scope is unavailable.
+- **Cloud execution seam.** GitHub Actions adapter (OC-2), per-step
+  dispatch, App-token events, comment/label trigger; controller-writer
+  security carried forward; budget enforcement live.
+- **Autonomy progression.** Mode 2 (auto-merge green expand-only/flagged,
+  human at feature-acceptance) then Level 3 — each earned with measured
+  promotion data, never a flag flip. Merge autonomy last, if ever.
+- **Dogfood expansion.** Factory builds factory features from a pinned
+  human-released tag; control-plane paths under CODEOWNERS; onboarding
+  hardening + fresh-repo test-out; remaining adapters (api-direct,
+  claude-code, codex, copilot-cli); factory regression suite.
+- **State-vault mining + team/org scope.** Queryable "how was this built"
+  across projects/scopes; one state repo per trust boundary; mining output
+  to humans + stats only (anything into a dispatch package human-promoted
+  + pinned).
+- **Public + polish.** Repo goes public when the demo works end-to-end
+  (Randy, 2026-11-14); engineer-focused getting-started, fork-and-adapt
+  demo, scripted onboarding, docs.
 
 ## 12. Explicitly deferred
 
@@ -904,3 +922,9 @@ Locked by Randy's notes (no re-litigation without new direction):
 | 2026-11-14 | OC-11 RATIFIED (Randy): engineering professionals are the target audience — enabling people like Randy to build software autonomously; supersedes non-developer-first as the primary target; architecture/data-model/decomposition approval gates first-class; touchpoints remain a profile |
 | 2026-11-14 | OC-8 confirmed + extended (Randy): state vault is a NEW dedicated repo separate from ~/Notes; scoped to a person, team, or organization (sets ownership/visibility/dispatch+mine authority); tools mine the vault to see how things were built (provenance/decisions/patterns/cost history) — a queryable knowledge substrate; scope model P1, mining tools P6+ |
 | 2026-11-14 | Round-3 feasibility fix pass (Randy agreed all): merge-integrity via git merge-tree (review the merge-result tree, no rebase after review, squash tree = reviewed merge-result tree — resolves the round-1 contradiction); per-story ledger files (workspaces/<name>/ledger/stories/<id>.jsonl) eliminate cross-story CAS contention + 3× backoff retry; cross-repo evidence validation protocol (repo@sha fetch, evidence-unreachable BLOCKED) + force-push liveness check; concrete App token boundary (contents/PR/issues write, no workflows, never a required approver, human-only CODEOWNERS); scope enforced via GitHub permissions; branch-protection rulesets per merge mode; claim-lease split-brain guards; inbox blocked_count ordering; state-repo bootstrap/discover-join; egress allowlist deferred to P6 (P3 accepted risk + compensating controls); pre-push secret scanning; two pre-freeze validations (single-story hand-run + two-story concurrency smoke test); no-specification-shell-freezes rule (example+schema+pseudocode) |
+| 2026-11-14 | OC-12 RATIFIED (Randy, Fable review 2): walking skeleton replaces the P1 contract freeze — build a minimum factory, run 5 real to-do stories locally with a control arm; contracts v0 (schema-versioned), freeze only after ~10 real stories; intake pulled forward (highest product risk) |
+| 2026-11-14 | OC-13 RATIFIED (Randy): adopt the v1 cut list — cut cloud adapter, merge modes 2/3 + Level 3, claim leases, team/org scope, mining, multi-repo, flag registry, board custom fields (→labels), LIVE/SCREENSHOT wireframe tiers (→local URL), Copilot-review/remediation knobs, PRD-versioning gate/reduced-assurance/regression suite (add on first case), 4 design approvals (→1), Obsidian renders beyond one status file; full vision = north star |
+| 2026-11-14 | OC-14 RATIFIED (Randy): controller-writer security — agents never hold a state-repo write token; agent emits results to product repo, separate controller job (no model output/product code) validates+appends; two identities (agent App / controller App); single controller writer fixes ledger contention (MRG-1 reproduced: per-story files do NOT remove push contention); works on Free plan, no branch-protection dependency |
+| 2026-11-14 | OC-15 RATIFIED (Randy): merge protocol = update-before-review + "require branches up to date before merging"; tests+review on the merged branch head; squash tree = reviewed head by construction; CUT merge-tree protocol + post-merge auto-revert (alarm only; red main → prepared revert PR in inbox); scoped re-review (only when story diff/manifest touched); verify on a real PR |
+| 2026-11-14 | OC-16 RATIFIED (Randy): baseline + kill criterion — control arm (same 5 stories via single coding-agent session); compare human-minutes/defects/cost; STOP and reconsider if the factory doesn't win at an acceptable cost multiple; process-overhead-ratio headline metric; risk-tiered pipeline; seeded-defect calibration moved to v1/P3 |
+| 2026-11-14 | Fable review 2 process lessons accepted: EXECUTE load-bearing claims in grills (not text-presence); require a cut list each round (100% acceptance is a warning); prefer the platform's own guarantee over clever mechanisms; label "verified" as docs-checked vs reasoned; threat-model the whole token→repo map. Finding IDs relabeled to 3+ letter convention (MRG/SEC/ECN/HUM/OVR/PRD) per Randy's labeling rule |

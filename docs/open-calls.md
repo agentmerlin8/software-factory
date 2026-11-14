@@ -1,9 +1,10 @@
-# Open calls — ALL CLOSED (OC-1…OC-11 ratified by Randy 2026-11-14)
+# Open calls — ALL CLOSED (OC-1…OC-16 ratified by Randy 2026-11-14)
 
-OC-1…OC-7 ratified 2026-11-14 (vision grill). OC-8…OC-11 opened by the
-Fable 5.2 external design review (issue #1) and ratified by Randy
-2026-11-14. This file is the decision record; the vision's locked-decisions
-table carries the same facts.
+OC-1…OC-7 ratified 2026-11-14 (vision grill). OC-8…OC-11 opened by Fable
+design review 1 (issue #1), ratified 2026-11-14. OC-12…OC-16 opened by
+Fable design review 2 (issue #2), ratified by Randy 2026-11-14 ("I agree
+with your recommendations"). This file is the decision record; the
+vision's locked-decisions table carries the same facts.
 
 ## OC-1 — Relationship to the old public repo — CLOSED
 
@@ -186,3 +187,103 @@ human hands (principle 15 as a gate). Touchpoints remain a profile, so a
 lower-touch profile can exist later — but the engineer is the design
 center through the roadmap, and the architecture/data-model/decomposition
 approval gates are first-class, not hidden.
+
+---
+
+# Opened by Fable design review 2 (issue #2) — ratified 2026-11-14
+
+Finding IDs below use the canonical 3+ letter convention (MRG/SEC/ECN/HUM/
+OVR/PRD); Fable's original short labels are kept in parentheses for
+traceability only.
+
+## OC-12 — Roadmap: walking skeleton vs P1 freeze — CLOSED
+
+**Decision (Randy, 2026-11-14): walking skeleton.** Replace the P1 contract
+freeze with a 5-story local walking skeleton + a control arm. Contracts are
+**v0** (schema-versioned, expected to change); freeze only after ~10 real
+stories. Rationale (Fable OVR-1 / E1): the hand-run tests the ledger, not
+the three risky hypotheses — (1) an agent under these contracts produces
+mergeable stories at tolerable cost, (2) intake produces a PRD an engineer
+approves, (3) fresh-context cross-family review catches defects a single
+session misses. Intake (highest product risk) is pulled forward, not
+scheduled fourth. "Freeze before execution" contradicted schema-version-on-
+every-event; v0 resolves that.
+
+## OC-13 — v1 cut list — CLOSED
+
+**Decision (Randy, 2026-11-14): adopt the cuts.** The full vision stays the
+north star; v1 is the minimum that proves the thesis. CUT from v1:
+- GitHub Actions cloud adapter (local-first reaches the demo; removes
+  SEC-2/SEC-3/MRG-8 from v1).
+- Merge modes 2 & 3 and Level 3 (no data to earn them; mode 1 only).
+- Claim leases (one operator + job timeouts suffice; MRG-7).
+- Team & org scope (no isolation inside one vault; SEC-7) — person scope
+  only, one state repo per trust boundary.
+- State-vault mining (stored injection across projects; SEC-6; nothing to
+  mine yet).
+- Multi-repo stories (breaks the per-story mutex; MRG-8; demo is one repo).
+- Flag registry & lifecycle (a to-do app needs no flags).
+- Board lane-per-state + custom fields → issue labels + assignee (same
+  visibility, no Projects API limits).
+- LIVE & SCREENSHOT wireframe tiers → a local Storybook URL.
+- Copilot-review knob & remediation modes (configuration with no user
+  asking for it).
+- PRD-versioning gate, reduced-assurance mode, regression suite (add when
+  the first real case appears).
+- Four separate upstream design approvals → one design document, one
+  approval (HUM-2 / D2).
+- Obsidian renders beyond one status file (injection surface + write
+  contention for no demo value).
+
+## OC-14 — Security model given the Free plan — CLOSED
+
+**Decision (Randy, 2026-11-14): controller-writer model.** Security must
+NOT depend on branch protection (org is Free; private-repo protection/
+rulesets return 403 — verified). Design:
+- **Agents never hold a write token to the state repo.** An agent job emits
+  results as an artifact or a branch in the PRODUCT repo. A separate
+  **controller job** — runs no model output and no product code — validates
+  and appends to the state repo. (SEC-1 / B1.)
+- **Two identities:** an agent App (push story branches, open PRs) and a
+  controller App (post checks, merge). The controller key never appears in
+  a job that runs model output or product code. (SEC-2 / B2.)
+- Policy config changes only by human-reviewed PR; block force-push on
+  state main.
+- Single controller writer serialized by one concurrency group also fixes
+  the ledger push contention (MRG-1 / A1).
+- Paid-plan upgrade vs public-earlier is a SEPARATE, optional decision —
+  the controller-writer model works on Free.
+
+## OC-15 — Merge protocol — CLOSED
+
+**Decision (Randy, 2026-11-14): update-before-review + strict up-to-date.**
+Replace the merge-tree protocol (MRG-2/MRG-3 / A2/A3):
+- Merge main into the story branch BEFORE review; run tests AND the review
+  on that branch head (a real commit CI can run on — fixes "nothing tests
+  the merged tree").
+- Enable "require branches to be up to date before merging"; GitHub refuses
+  the merge if main moved; the squash tree equals the reviewed head tree by
+  construction.
+- CUT the post-merge mismatch auto-revert (no identity was allowed to do
+  it; MRG-4 / A4). Keep a post-merge tree comparison as a cheap ALARM, not
+  a control. For red main: block dispatches + a prepared revert PR in the
+  inbox as a one-click human decision.
+- Re-review only when the story's own diff changed or main's delta touches
+  the story's manifest; else deterministic gates only (fixes quadratic
+  re-review; MRG-5 / A5).
+- VERIFY the strict setting + server-side squash equivalence on one real PR
+  (rename + line-ending case) before relying on it.
+
+## OC-16 — Baseline / kill criterion — CLOSED
+
+**Decision (Randy, 2026-11-14): control arm + kill criterion.** The first
+experiment (the walking skeleton) gets a control arm: build the same 5
+to-do stories with a single coding-agent session; compare human-minutes
+and escaped defects per story, plus cost. **If the factory does not win on
+human-minutes or defects at a cost multiple Randy accepts, STOP and
+reconsider** — no amount of contract work rescues a factory that isn't
+better than using a coding agent directly (PRD-1 / F1). Add "process
+overhead ratio" (non-coder tokens / coder tokens) as a headline metric;
+tier the pipeline by risk so small stories skip plan review and use one
+reviewer (ECN-1 / C1). Move seeded-defect reviewer calibration to P3
+(before routing starts), not P6 (ECN-3 / C3).
