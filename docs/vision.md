@@ -1,12 +1,15 @@
 # Software Factory — Vision (consolidated 2026-11-14)
 
-Status: **VISION APPROVED.** Grill round 1 = APPROVE WITH FIXES (72/100);
-fix pass applied 2026-11-14 per Randy's answers; bounded round-2 re-grill =
-**APPROVE, 37/37 findings verified, 0 new contradictions** (see
+Status: Vision APPROVED by grill rounds 1–2 (2026-11-14); **Fable 5.2
+external design review (issue #1) dispositioned same day** — accepted
+fixes folded here, four owner calls OPEN (OC-8 ledger location, OC-9 merge
+policy, OC-10 escalation model, OC-11 persona). Round-3 grill of the
+amended sections pending after the calls close. See
+[design-review-disposition-2026-11-14.md](design-review-disposition-2026-11-14.md),
 [grill-record-2026-11-14.md](grill-record-2026-11-14.md),
 [grill-disposition-2026-11-14.md](grill-disposition-2026-11-14.md),
-[grill-regrill-round2-2026-11-14.md](grill-regrill-round2-2026-11-14.md)).
-All 7 open calls ratified 2026-11-14. Cleared for backlog decomposition.
+[grill-regrill-round2-2026-11-14.md](grill-regrill-round2-2026-11-14.md).
+OC-1…OC-7 ratified 2026-11-14.
 
 ## 1. Goal
 
@@ -139,8 +142,18 @@ One product, four surfaces:
    **Failures surface here**: any blocked story/feature lands in the Blocked
    lane with an auto-created issue linking the evidence, where a human OR an
    authorized agent (per autonomy policy) reviews and clears it.
-   Drag-to-dispatch (board column-move → CLI dispatch) is a P5 capability.
-   (2026-11-13, 2026-10-18; board shape ratified 2026-11-14)
+   Dispatch is triggered by `/factory dispatch` comment or `factory:run`
+   label (P3); board drag-to-dispatch is an optional later UX (P6+, may be
+   dropped — see §5). (2026-11-13, 2026-10-18; board shape ratified
+   2026-11-14; dispatch trigger amended per design review 1.5)
+
+   **The inbox (design review 2.2)**: `factory inbox` — one queue of
+   everything waiting on the human, ordered by how much downstream work
+   each item blocks. Each item is a decision card: the question, the
+   options, the agent's recommendation, evidence links, and what happens if
+   nobody answers. Pushed via GitHub assignment/mentions so phone
+   notifications come free. The board shows where work is; the inbox shows
+   what needs YOU. Lands in P2.
 
    **Board minimum schema (frozen for P0; exact state list frozen in P1):**
    - Lanes: one per story lifecycle state. The P1 state machine defines the
@@ -188,11 +201,16 @@ Per story: test plan → impl plan → plan review (fresh context)
   ▼
 Code (TDD) → build + story tests green → adversarial code review on the
   branch (fresh context, cross-model) → proof artifacts
-  │   code review FAIL → rework (≤2 loops) → 2-loop cap → BLOCKED
+  │   code review FAIL → rework: loop 1 same tier, loop 2 next model tier;
+  │   contract-class defects route back to the plan/PRD, not the coder
+  │   2-loop cap → BLOCKED
   ▼
-PR opened/updated → human merge gate
+Branch brought up to date with main → deterministic gates re-run on the
+  merge result → PR opened/updated → merge gate (granularity = OC-9)
   ▼
 main — trunk-based, squash, one commit per story   (RATIFIED OC-3)
+  │   squash tree verified equal to the reviewed tree; evidence pinned by
+  │   tree hash + commit SHA under durable refs/factory/* refs
   │   (incomplete user-visible flows stay expand-only or flagged)
   ▼
 Feature-acceptance gate: all feature stories merged + feature-level
@@ -208,7 +226,8 @@ BLOCKED (any gate's 2-loop cap, or feature-gate failure):
     review/evidence record
   → a human OR an authorized agent (per autonomy policy) reviews and
     clears: accept-with-known-issues / re-scope into new stories (with
-    lineage) / reject (CLOSED-WONT-FIX)
+    lineage) / amend-the-spec / retry-at-higher-tier / reject
+    (CLOSED-WONT-FIX)
 ```
 
 Trunk-based integration (OC-3, ratified 2026-11-14): no feature branches.
@@ -277,6 +296,33 @@ software-factory repo        CLI · core agents · Intake Engine ·
   stories merged + acceptance gate passed = feature done); feature-level
   gate events (acceptance-pass / acceptance-fail) ARE first-class ledger
   events for audit. Story events remain the only state-driving events.
+- **Evidence integrity (design review 1.1)**: evidence is pinned by **tree
+  hash AND commit SHA**; before merge the branch is brought up to date with
+  main and the deterministic gates re-run on the merge result; the squash
+  commit's tree is verified equal to the reviewed tree. Evidence refs live
+  under a durable `refs/factory/*` namespace that ledger tooling fetches —
+  never Actions artifacts (90-day expiry) and never dependent on
+  `refs/pull/*` (not fetched by a fresh clone). Extends the proven
+  review_context pattern (immutable base/reviewed SHAs + manifest digest).
+- **Ledger write location**: OPEN — OC-8 (recommendation: dedicated orphan
+  ref + git non-fast-forward rejection as compare-and-swap for appends and
+  claims; Actions concurrency group per story as the cloud mutex). Decided
+  before P1 freezes the ledger schema; the ledger never writes to main.
+- **Human approval anchoring (design review 1.3)**: "a human approved" is
+  tied to a GitHub object the agent token cannot forge — a human PR
+  review/merge, or an Actions environment with required reviewers. The
+  ledger records a reference; a gate verifies it through the API.
+  Control-plane paths (`.github/workflows/`, gate catalog, autonomy policy,
+  override file) are protected by CODEOWNERS + branch protection; the agent
+  token carries no `workflows` permission. The proven human-only
+  comment-gate pattern (positive-only actor trust) ports from the reference
+  implementation as the command surface, with this anchoring underneath.
+- **Security posture (design review 1.4)**: a threat model is a P1
+  deliverable. Agent jobs run behind a network egress allowlist with keys
+  scoped per job. A deterministic new-dependency gate checks existence,
+  age/usage, allowed licence, and committed lockfile; a new dependency is a
+  human touchpoint at Levels 1–2. Board-write/dispatch authority is named
+  (positive-only actor trust). A secret-scanning gate runs before push.
 - **Claim leases**: every claim carries a TTL (default 30m cloud, 10m
   local), auto-renewed by the holding process; an expired claim auto-releases
   with an audit event, so a dead ephemeral session never holds a story
@@ -284,16 +330,27 @@ software-factory repo        CLI · core agents · Intake Engine ·
   not the normal path. (Resolves the claim-lock vs ephemeral-Actions hole.)
 - **Cloud execution**: GitHub Actions–backed agent sessions (RATIFIED
   OC-2, 2026-11-14): the CLI triggers a workflow running an agent in a
-  container with repo-scoped credentials; board drag triggers the same
-  path. Adapter seam keeps other cloud runtimes swappable. **Dispatch
-  model:** each pipeline step (plan, code, review, proof) is a SEPARATE
-  Actions job; state is checkpointed in the ledger between steps; no single
-  job spans multiple stages. Jobs are idempotent — replay the dispatch, not
-  the session. This is what makes ephemeral cloud sessions safe.
-- **Board sync direction**: primarily one-way (ledger → board).
-  Drag-to-dispatch is a board column-move webhook → CLI `factory dispatch`;
-  the ledger records the dispatch event only after the CLI receives it. The
-  board triggers the action; the ledger remains the sole source of truth.
+  container with repo-scoped credentials. Agent jobs use a **GitHub App
+  token** (events created with the default GITHUB_TOKEN do not trigger
+  workflows — verified). Adapter seam keeps other cloud runtimes
+  swappable. **Dispatch model:** each pipeline step (plan, code, review,
+  proof) is a SEPARATE Actions job; state is checkpointed in the ledger
+  between steps; no single job spans multiple stages. Jobs are idempotent:
+  side effects (branch push, PR, issue) are upserts keyed by dispatch id; a
+  replay resets the branch to the pinned base — replay the dispatch, not
+  the session. **Dispatch trigger (design review 1.5, verified):** a
+  `/factory dispatch` issue comment or a `factory:run` label — the proven
+  command-surface pattern. Board drag-to-dispatch is an OPTIONAL later UX
+  (P6+): projects_v2_item webhooks are organization-only and not an Actions
+  trigger (verified), so drag requires an org-owned board + App webhook
+  relay; it may be dropped.
+- **Board sync direction**: primarily one-way (ledger → board). A
+  `factory board reconcile` command detects and repairs drift from human
+  card moves (proven pattern from the reference implementation); sync
+  failure is a visible state, never silent. Dispatch triggers arrive as
+  comment/label commands (see Cloud execution); the ledger records the
+  dispatch event only after the CLI receives it. The board triggers the
+  action; the ledger remains the sole source of truth.
 - **Onboarding**: `factory init [--guided]` — creates the workspace, onboards
   a target repo, generates an environment-config template, and validates the
   setup with `factory doctor`. `--guided` asks setup questions interactively
@@ -328,11 +385,17 @@ Distilled from five months of runs and studies. These survive the rewrite:
 4. **Fresh-context adversarial review.** Reviewers never see the author's
    reasoning; cross-model-family panels; structured findings, each
    dispositioned; review record pinned to the exact head; 2-loop cap then
-   escalate. Rubrics stop critic loops. **Escalation = the story enters
-   BLOCKED** (Blocked lane on the board) **with an auto-created issue linking
-   the full review record; a human or an authorized agent (per autonomy
-   policy) must disposition it** — accept-with-known-issues, re-scope into
-   new stories with lineage, or reject (CLOSED-WONT-FIX).
+   escalate. Rubrics stop critic loops. Rework is tiered: loop 1 same tier,
+   loop 2 next model tier; contract-class defects route back to the plan or
+   PRD, not the coder. **Escalation = the story enters BLOCKED** (Blocked
+   lane on the board) **with an auto-created issue linking the full review
+   record; a human or an authorized agent (per autonomy policy) must
+   disposition it** — accept-with-known-issues, re-scope into new stories
+   with lineage, amend-the-spec, retry-at-higher-tier, or reject
+   (CLOSED-WONT-FIX). **Reduced-assurance mode:** a user with a single
+   provider cannot run a cross-family panel; the review runs single-family
+   and the record is marked reduced-assurance — recorded, never silent
+   (design review §3).
 5. **Plans are design contracts, not code.** Manifest, signatures, test
    names, decisions & rejected alternatives. Coder is sole code author.
 6. **Cheapest model sufficient per role.** Tier routing, complete matrix
@@ -366,7 +429,21 @@ Distilled from five months of runs and studies. These survive the rewrite:
     configuration.
 15. **Randy keeps the architecture.** Briefings before automation; decision
     calls walked through in plain language; the owner understands what's
-    being built (2026-10-18).
+    being built (2026-10-18). **This is a gate, not a note (design review
+    2.5):** engineering design, UI/UX design, test strategy, and story
+    decomposition each get fresh-context review AND a human approval
+    touchpoint (architecture, data model, decomposition) — the upstream
+    stages where mistakes are most expensive. The touchpoint set is a
+    profile (primary persona = OC-11).
+16. **Requirements change safely (design review 2.6).** The PRD is
+    versioned; a gate flags in-flight stories whose pinned acceptance
+    criteria changed; amendments are recorded as DECs with re-pin or
+    re-scope. Nothing silently re-bases a story onto a new spec.
+17. **The codebase is maintained, not just generated (design review §3).**
+    Greenfield lasts one story — after the first merge every story works on
+    an existing codebase. An architecture + conventions document is
+    maintained and updated by a gate at merge, well before the deferred
+    codebase-bootstrapping feature.
 
 ## 7. Autonomy model — three levels (rules RATIFIED OC-4)
 
@@ -383,9 +460,14 @@ RATIFIED (OC-4, 2026-11-14): levels are gate policy, one pipeline, measured
 promotion; details below.
 - Levels are **policy configuration**, not separate code paths: same
   pipeline, gate policy decides which transitions need a human actor.
-- Level 3 requires a confidence/escalation contract: what counts as "can't
-  answer confidently", how questions reach the human (board? issue? chat?),
-  and what happens while waiting (BLOCKED first-class).
+- Level 3 requires an escalation contract. **The confidence-threshold
+  formulation is superseded pending OC-10** (design review 2.3: model
+  self-reported confidence is poorly calibrated). Recommendation: escalate
+  by deterministic decision class (irreversible actions, scope change vs
+  PRD, new dependencies, security-sensitive paths, budget overrun, reviewer
+  disagreement); everything else proceeds on a recorded assumption, with a
+  human-reviewable assumption log and veto→rework. Questions reach the
+  human via the inbox (§3.4); BLOCKED first-class while waiting.
 - Autonomy is earned with data: per-level metrics (intervention rate, defect
   escape rate, cost) gate promotion. Level 3 for a repo/class of work is a
   measured decision, not a flag flip. **Promotion thresholds** (max
@@ -451,10 +533,18 @@ selection can be tuned on data.
   zeros): role, resolved provider + model (sealed at dispatch), input/output
   tokens, cost, wall time, outcome, loop tags.
 - **Derived per story / feature / run**: cycle time per stage and end-to-end
-  (idea → merged → live-proven), total cost, model mix, revision-loop count
-  and class (mechanical / reasoning / contract / nit), review-finding
-  severity distribution, first-try pass rate, defect escapes post-merge,
-  human-intervention count, blocked-time.
+  (idea → merged → live-proven), **split into machine time vs
+  waiting-on-human time** (design review 2.1), total cost, model mix,
+  revision-loop count and class (mechanical / reasoning / contract / nit),
+  review-finding severity distribution, first-try pass rate, defect escapes
+  post-merge, human-intervention count, blocked-time. **"Human minutes per
+  merged story" is a headline metric alongside cost** — it measures whether
+  the factory actually frees the human.
+- **Budgets are enforced, not just measured (design review §3)**: hard
+  ceilings per dispatch, story, feature, and day as stop rules; a retry
+  budget for platform failures; job timeouts; and a `factory pause` kill
+  switch. The two-loop cap covers review loops, not an agent stuck inside
+  one session — the ceilings do.
 - **The statistics view**: `factory stats` (CLI) + a rendered dashboard in
   the repo, plus board fields (Tokens/cost, Model(s) used, Cycle time) so
   the numbers are visible where the work is. Per-model and per-role
@@ -476,7 +566,9 @@ each phase ends in something demonstrable.
   Storybook spike (OC-6, ratified) starts here as **throwaway exploration**:
   hardcoded setup, fixed conversation script, output = model/adapter
   evaluation data, not reusable code. P4 builds the real intake on P1
-  schemas, informed by the spike.
+  schemas, informed by the spike. **Before P1 freezes contracts, run one
+  story through by hand with the human adapter** (design review §3) — the
+  contracts are frozen against a real run, not only paper.
 - **P1 — Declarative core.** Workspace + environment config schemas,
   ledger schema (incl. measurement fields, §10), story lifecycle state
   machine, dispatch-package contract. No execution yet — the contracts
@@ -487,26 +579,48 @@ each phase ends in something demonstrable.
     the human);
   - the **story schema**: id, feature ref, ACs anchored to the PRD,
     structural-signal count, dependencies, target repo, state;
-  - the **story failure lifecycle**: rework loop, 2-loop cap, BLOCKED,
-    human/authorized-agent disposition paths (accept / re-scope / reject);
+  - the **story failure lifecycle**: rework loop (tiered), 2-loop cap,
+    BLOCKED, human/authorized-agent disposition paths (accept / re-scope /
+    amend-spec / retry-higher-tier / reject);
   - the **feature-acceptance failure path** (BLOCKED + auto-created fix
     stories) and feature-state computation rules (computed render; gate
     pass/fail are ledger events);
   - the **model-routing schema** (roles × tiers) and claim-lease semantics;
   - workspace directory configuration (default `factory/`, self-host
-    `.factory/`).
+    `.factory/`);
+  - **ledger write location (OC-8)** + **schema version on every ledger
+    event from the first commit** (later changes are migrations);
+  - **evidence integrity**: tree-hash + SHA pinning, durable
+    `refs/factory/*` evidence store, up-to-date-with-main + gate re-run
+    before merge, squash-tree-equals-reviewed-tree check;
+  - **human approval anchoring** (GitHub-object proof + CODEOWNERS +
+    no-`workflows` agent token) and the **threat model** (egress allowlist,
+    per-job keys, dependency gate, secret scanning, dispatch authority);
+  - **budget ceilings** as stop rules; **idempotent-replay semantics**
+    (upserts keyed by dispatch id); **process + prompt version sealed into
+    dispatch identity**; **flag registry + lifecycle**; **PRD versioning +
+    changed-criteria gate**; **test-gaming gate** (deleted tests / new
+    skips / fewer assertions fail; AC→named-test traceability);
+    **reduced-assurance review mode**; the maintained **architecture +
+    conventions doc**.
   Storybook spike continues.
 - **P2 — CLI read path + control plane.** `factory status/doctor`,
   controller/ledger/gates/renders ported genericized from the kit work;
   board sync (visibility first — Randy needs to SEE the work); one-way
-  ledger→board mirror with the sync tool as sole writer.
+  ledger→board mirror with the sync tool as sole writer + `factory board
+  reconcile`; **`factory inbox`** (decision cards, blockage-ordered, pushed
+  via GitHub mentions).
 - **P3 — Execution seam.** One adapter end-to-end (Hermes local first):
   dispatch → agent session → artifacts → evidence → transitions. Then the
   GitHub Actions cloud adapter (OC-2 ratified), per-step dispatch with
-  ledger checkpoints + claim leases. Parameter-driven model routing from
-  day one; metering live (§10). **Deployability guard:** CI on every main
-  push runs build + smoke tests; red main = BLOCKED new dispatches until
-  green. **P3 exit = dogfood cutoff (OC-5 ratified).**
+  ledger checkpoints + claim leases, App-token events, comment/label
+  dispatch trigger. Parameter-driven model routing from day one; metering
+  live (§10); budget enforcement live. **Deployability guard:** CI on every
+  main push runs build + smoke tests; red main = BLOCKED new dispatches
+  until green, and **the offending commit is auto-reverted with its story
+  reopened** (design review §3 — red main has an owner). Architecture +
+  conventions doc updated by a merge gate. **P3 exit = dogfood cutoff
+  (OC-5 ratified).**
 - **P4 — Intake & Storybook.** Guided intake session (harness-agnostic
   protocol, Hermes first — OC-7 ratified), question flow, wireframe
   generation + exposure to the user via the LIVE/LINK/SCREENSHOT tiers,
@@ -515,16 +629,19 @@ each phase ends in something demonstrable.
 - **P5 — Demo end-to-end.** To-do app from plain description to deployed
   artifact through the full pipeline at Level 1/2, in the separate demo
   repo. Factory generates a baseline CI config (build/test/lint) for the
-  target repo; live proof = automated post-deploy evidence. **Board
-  drag-to-dispatch** lands here (depends on P2 board sync + P3 cloud
-  adapter). Statistics dashboard polished. **P5 exit = repo goes PUBLIC**
-  (Randy, 2026-11-14) — "something working" is the bar.
+  target repo; live proof = automated post-deploy evidence; flag-cleanup
+  stories auto-created on feature acceptance. Statistics dashboard
+  polished. **P5 exit = repo goes PUBLIC** (Randy, 2026-11-14) —
+  "something working" is the bar.
 - **P6 — Dogfood expansion.** Factory builds factory features (started at
   P3 exit per OC-5); autonomy-level policy + metrics; **Level-3 promotion
   thresholds defined here** (no activation without data from ≥3 features);
   onboarding hardening + fresh-repo test-out; remaining adapters
   (priority: api-direct, claude-code, codex, copilot-cli; the human adapter
-  exists from P2 as the CLI itself).
+  exists from P2 as the CLI itself); **factory regression suite** (fixed
+  stories with known outcomes, replayed before any process change) and
+  **reviewer catch-rate calibration** (seeded-defect runs); optional board
+  drag-to-dispatch UX (org board + App webhook relay) if still wanted.
 - **P7 — Public polish.** Non-developer getting-started, fork-and-adapt
   demo, scripted onboarding, docs. The repo is already public since P5;
   this phase polishes what is public.
@@ -590,3 +707,6 @@ Locked by Randy's notes (no re-litigation without new direction):
 | 2026-11-14 | Grill fix: Intake Engine = stateful component behind harness-agnostic protocol; Storybook exposure tiers LIVE/LINK/SCREENSHOT; demo in separate repo software-factory-demo (P5); onboarding = factory init [--guided]; drag-to-dispatch = P5 |
 | 2026-11-14 | Grill fix: feature state = computed render (gate pass/fail are ledger events); board sync one-way ledger→board, drag = webhook→CLI trigger; self-host workspace at .factory/ |
 | 2026-11-14 | Grill fix (Randy): measurement first-class — cycle time, cost, models used, all statistics per dispatch/story/feature; factory stats + dashboard + board fields; schema P1, metering P3, dashboard P5; Level-3 thresholds in P6 (≥3 features of data) |
+| 2026-11-14 | Design review (Fable 5.2, issue #1) accepted: evidence pinned by tree hash + SHA under durable refs/factory/*; up-to-date-with-main + gate re-run before merge; squash tree = reviewed tree; human approval anchored in unforgeable GitHub objects + CODEOWNERS + no-workflows agent token; threat model + dependency gate + egress allowlist + secret scanning (P1) |
+| 2026-11-14 | Design review accepted: dispatch trigger = /factory dispatch comment or factory:run label (App token); board drag-to-dispatch demoted to optional P6+ UX (projects_v2_item is org-only, not an Actions trigger — verified); factory inbox (P2); machine-vs-human cycle-time split + human-minutes-per-story headline metric; budget ceilings + factory pause; red-main auto-revert; tiered rework + contract-defect routing; upstream design/decomposition review gates; PRD versioning; maintained architecture doc; reduced-assurance review mode; hand-run story before P1 freeze; schema version from commit one |
+| 2026-11-14 | Design review OPEN owner calls: OC-8 ledger write location (rec: dedicated ref + CAS + concurrency mutex), OC-9 merge policy (rec: auto-merge green expand-only/flagged stories, human at feature-acceptance), OC-10 escalation model (rec: deterministic decision classes + assumption log), OC-11 primary persona (rec: engineer-primary through P6, touchpoint profiles) |
