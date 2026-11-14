@@ -3,10 +3,10 @@
 Ground-up rewrite of the AI software factory: **idea → deployable artifact**,
 with the human involved at exactly the right steps.
 
-Status: Vision APPROVED by grill rounds 1–2; Fable 5.2 external design
-review (issue #1) dispositioned; **all owner calls OC-1…OC-11 ratified
-2026-11-14**. Round-3 grill of amended sections pending. Private until the
-demo works end-to-end (P5 exit); then public.
+Status: **VISION APPROVED — fully grilled** (rounds 1–2 consistency +
+Fable design review + round-3 feasibility + round-4 confirmation, 21/21).
+All owner calls OC-1…OC-11 ratified 2026-11-14. Cleared for backlog + P1.
+Private until the demo works end-to-end (P5 exit); then public.
 
 ## What this is
 
