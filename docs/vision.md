@@ -1,9 +1,12 @@
 # Software Factory — Vision (consolidated 2026-11-14)
 
-Status: Grill round 1 returned APPROVE WITH FIXES (72/100); fix pass applied
-2026-11-14 per Randy's answers (see [grill-record-2026-11-14.md](grill-record-2026-11-14.md)
-and [grill-disposition-2026-11-14.md](grill-disposition-2026-11-14.md)).
-Bounded round-2 re-grill pending. All 7 open calls ratified 2026-11-14.
+Status: **VISION APPROVED.** Grill round 1 = APPROVE WITH FIXES (72/100);
+fix pass applied 2026-11-14 per Randy's answers; bounded round-2 re-grill =
+**APPROVE, 37/37 findings verified, 0 new contradictions** (see
+[grill-record-2026-11-14.md](grill-record-2026-11-14.md),
+[grill-disposition-2026-11-14.md](grill-disposition-2026-11-14.md),
+[grill-regrill-round2-2026-11-14.md](grill-regrill-round2-2026-11-14.md)).
+All 7 open calls ratified 2026-11-14. Cleared for backlog decomposition.
 
 ## 1. Goal
 
