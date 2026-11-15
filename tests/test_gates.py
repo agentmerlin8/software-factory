@@ -62,7 +62,7 @@ def test_pre_review_aggregates(repo):
     assert res.checks == {"build": True, "tests": True,
                           "manifest": True, "secrets": True,
                           "boundaries": True, "announcements": True,
-                          "pr_size": True}
+                          "pr_size": True, "boundary_mutants": True}
 
 
 def test_pre_review_fails_closed(repo):

@@ -70,9 +70,10 @@ class SizeBudget:
         return "; ".join(self.failures) if self.failures else "none"
 
 
-def diff_stats(workdir: Path, base: str = "origin/main") -> list[DiffStat]:
-    """Per-file numstat for base...HEAD."""
-    p = subprocess.run(["git", "diff", "--numstat", base, "HEAD"],
+def diff_stats(workdir: Path, base: str = "origin/main",
+               head: str = "HEAD") -> list[DiffStat]:
+    """Per-file numstat for base...head."""
+    p = subprocess.run(["git", "diff", "--numstat", base, head],
                        cwd=str(workdir), capture_output=True, text=True)
     if p.returncode != 0:
         return []
@@ -120,5 +121,6 @@ def check(stats: list[DiffStat], *,
                       failures=failures, advice=advice)
 
 
-def check_repo(workdir: Path, base: str = "origin/main", **kw) -> SizeBudget:
-    return check(diff_stats(Path(workdir), base), **kw)
+def check_repo(workdir: Path, base: str = "origin/main", *,
+               head: str = "HEAD", **kw) -> SizeBudget:
+    return check(diff_stats(Path(workdir), base, head), **kw)

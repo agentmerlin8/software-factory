@@ -1,0 +1,922 @@
+--- src/store.ts @ b6552652b ---
+/**
+ * store.ts — the ONLY module that touches localStorage (design §3).
+ *
+ * SKEL-1 scaffold: types + persistence helpers + subscription seam.
+ * Story TOD-1 adds the first real operations; each story extends this
+ * module. No story reads/writes localStorage directly.
+ */
+
+export interface Task {
+  id: string;
+  title: string;
+  completed: boolean;
+  createdAt: number;
+}
+
+export type Filter = "all" | "active" | "completed";
+
+const STORAGE_KEY = "todo-demo:tasks";
+const FILTER_KEY = "todo-demo:filter";
+
+type Listener = () => void;
+const listeners = new Set<Listener>();
+
+export function subscribe(fn: Listener): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function emit(): void {
+  for (const fn of listeners) fn();
+}
+
+/**
+ * Runtime guard for one stored entry. Storage is an UNTRUSTED boundary: the
+ * JSON may be written by an older version, another tab, or a user with
+ * devtools. `Array.isArray` alone lets `[null]` or `[{}]` reach the render
+ * and throw during mount, so every field is validated here, once.
+ */
+export function isTask(value: unknown): value is Task {
+  if (typeof value !== "object" || value === null) return false;
+  const t = value as Record<string, unknown>;
+  return (
+    typeof t.id === "string" &&
+    t.id.length > 0 &&
+    typeof t.title === "string" &&
+    typeof t.completed === "boolean" &&
+    typeof t.createdAt === "number" &&
+    Number.isFinite(t.createdAt)
+  );
+}
+
+export function loadTasks(): Task[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Drop malformed entries instead of crashing the mount. Dedupe by id so a
+    // corrupt store cannot produce duplicate React keys.
+    const seen = new Set<string>();
+    const tasks: Task[] = [];
+    for (const entry of parsed) {
+      if (!isTask(entry) || seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      tasks.push(entry);
+    }
+    return tasks;
+  } catch {
+    return [];
+  }
+}
+
+export function saveTasks(tasks: Task[]): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  emit();
+}
+
+/**
+ * TOD-2 — newest-first ordering. Pure: returns a new array, never mutates
+ * the input (loadTasks hands out fresh arrays, but callers may hold their
+ * own). Array.prototype.sort is stable (ES2019+), so tasks sharing a
+ * createdAt keep their stored order — no secondary tiebreaker needed.
+ */
+export function sortNewestFirst(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
+ * Append records with the read and the write in ONE synchronous step.
+ *
+ * A caller that reads, does work, then writes always has a window where
+ * another tab can commit; merging BEFORE the write does not close it (the
+ * window is between the merge-read and setItem). Here the current state is
+ * read immediately before setItem with nothing in between, so a concurrent
+ * commit is either already visible (and preserved) or lands after ours.
+ *
+ * localStorage has no compare-and-swap, so this narrows the window to the
+ * minimum the platform allows rather than eliminating it. Cross-tab
+ * atomicity would need the Web Locks API; that is a deliberate follow-up,
+ * not something this function claims to provide.
+ */
+export function appendTasks(incoming: Task[]): Task[] {
+  const current = loadTasks();
+  const byId = new Map(current.map((t) => [t.id, t]));
+  for (const t of incoming) {
+    if (!byId.has(t.id)) byId.set(t.id, t);
+  }
+  const merged = [...byId.values()];
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+  emit();
+  return merged;
+}
+
+export function loadFilter(): Filter {
+  const raw = localStorage.getItem(FILTER_KEY);
+  return raw === "active" || raw === "completed" ? raw : "all";
+}
+
+export function saveFilter(filter: Filter): void {
+  localStorage.setItem(FILTER_KEY, filter);
+  emit();
+}
+
+export function newId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * TOD-1 — add a task. Trims the title; empty/whitespace-only titles are
+ * rejected (returns null, store untouched, no notification). Persistence
+ * and notification go through the same seam every later story extends.
+ * Returns the created task so callers can update their view immediately.
+ */
+/**
+ * Append a task without clobbering a concurrent writer.
+ *
+ * localStorage has no compare-and-swap, so a plain read-modify-write loses
+ * updates when two tabs interleave (both read the same list, both write, the
+ * second erases the first). We cannot make the pair atomic, but we can make
+ * the WRITE a merge: re-read immediately before persisting and union by id.
+ * That narrows the window to a single synchronous read+write and, crucially,
+ * never drops a record another tab already committed.
+ */
+export function addTask(title: string): Task | null {
+  const trimmed = title.trim();
+  if (!trimmed) return null;
+  const task: Task = {
+    id: newId(),
+    title: trimmed,
+    completed: false,
+    createdAt: Date.now(),
+  };
+  // Single synchronous read+merge+write; see appendTasks for the guarantee
+  // and its limit.
+  appendTasks([task]);
+  return task;
+}
+--- src/store.test.ts @ b6552652b ---
+import { describe, it, expect, beforeEach } from "vitest";
+import {
+  addTask,
+  appendTasks,
+  isTask,
+  loadTasks,
+  saveTasks,
+  loadFilter,
+  saveFilter,
+  newId,
+  sortNewestFirst,
+  subscribe,
+  type Task,
+} from "./store";
+
+beforeEach(() => {
+  localStorage.clear();
+});
+
+describe("store persistence seam", () => {
+  it("round-trips tasks through localStorage", () => {
+    const tasks = [
+      { id: "a", title: "one", completed: false, createdAt: 1 },
+    ];
+    saveTasks(tasks);
+    expect(loadTasks()).toEqual(tasks);
+  });
+
+  it("returns empty list when nothing stored", () => {
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("returns empty list on corrupt storage", () => {
+    localStorage.setItem("todo-demo:tasks", "{not json");
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("defaults filter to all", () => {
+    expect(loadFilter()).toBe("all");
+  });
+
+  it("round-trips filter", () => {
+    saveFilter("completed");
+    expect(loadFilter()).toBe("completed");
+  });
+
+  it("rejects invalid filter values", () => {
+    localStorage.setItem("todo-demo:filter", "bogus");
+    expect(loadFilter()).toBe("all");
+  });
+
+  it("newId produces unique ids", () => {
+    const ids = new Set(Array.from({ length: 50 }, () => newId()));
+    expect(ids.size).toBe(50);
+  });
+});
+
+describe("addTask (TOD-1)", () => {
+  it("appends a task and persists it", () => {
+    const first = addTask("Water the plants");
+    const second = addTask("Read one chapter");
+
+    const tasks = loadTasks();
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]).toEqual(first);
+    expect(tasks[1]).toEqual(second);
+    expect(tasks.map((t) => t.title)).toEqual([
+      "Water the plants",
+      "Read one chapter",
+    ]);
+  });
+
+  it("creates well-formed tasks: unique id, trimmed title, not completed, timestamp", () => {
+    const before = Date.now();
+    const a = addTask("  Stretch for five minutes  ");
+    const b = addTask("Journal");
+    const after = Date.now();
+    if (!a || !b) throw new Error("addTask rejected a valid title");
+
+    expect(a.title).toBe("Stretch for five minutes");
+    expect(a.completed).toBe(false);
+    expect(typeof a.id).toBe("string");
+    expect(a.id.length).toBeGreaterThan(0);
+    expect(a.id).not.toBe(b.id);
+    expect(a.createdAt).toBeGreaterThanOrEqual(before);
+    expect(a.createdAt).toBeLessThanOrEqual(after);
+  });
+
+  it("rejects empty and whitespace-only titles: returns null, stores nothing", () => {
+    expect(addTask("")).toBeNull();
+    expect(addTask("   ")).toBeNull();
+    expect(addTask("\t\n ")).toBeNull();
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("notifies subscribers when a task is added, not when rejected", () => {
+    let calls = 0;
+    const unsubscribe = subscribe(() => {
+      calls += 1;
+    });
+
+    addTask("Ping");
+    expect(calls).toBe(1);
+    addTask("   ");
+    expect(calls).toBe(1);
+
+    unsubscribe();
+    addTask("After unsubscribe");
+    expect(calls).toBe(1);
+  });
+});
+describe("storage boundary validates entries (round-3 regression)", () => {
+  it("drops null entries instead of crashing the render", () => {
+    localStorage.setItem("todo-demo:tasks", "[null]");
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("drops entries missing required fields", () => {
+    localStorage.setItem(
+      "todo-demo:tasks",
+      JSON.stringify([{ id: "x" }, { title: "no id" }, 42, "str", []]),
+    );
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("drops entries with wrong field types", () => {
+    localStorage.setItem(
+      "todo-demo:tasks",
+      JSON.stringify([
+        { id: 1, title: "a", completed: false, createdAt: 1 },
+        { id: "b", title: null, completed: false, createdAt: 1 },
+        { id: "c", title: "c", completed: "no", createdAt: 1 },
+        { id: "d", title: "d", completed: false, createdAt: "1" },
+      ]),
+    );
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("keeps valid entries and drops only the malformed ones", () => {
+    const good = { id: "ok", title: "keep", completed: false, createdAt: 5 };
+    localStorage.setItem(
+      "todo-demo:tasks",
+      JSON.stringify([null, good, { id: "bad" }]),
+    );
+    expect(loadTasks()).toEqual([good]);
+  });
+
+  it("dedupes by id so corrupt stores cannot produce duplicate keys", () => {
+    const a = { id: "dup", title: "first", completed: false, createdAt: 1 };
+    const b = { id: "dup", title: "second", completed: true, createdAt: 2 };
+    localStorage.setItem("todo-demo:tasks", JSON.stringify([a, b]));
+    expect(loadTasks()).toEqual([a]);
+  });
+
+  it("rejects a non-number createdAt (type guard)", () => {
+    localStorage.setItem(
+      "todo-demo:tasks",
+      '[{"id":"x","title":"t","completed":false,"createdAt":null}]',
+    );
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("rejects non-finite NUMBERS (exercises Number.isFinite, not typeof)", () => {
+    // null/undefined/"1" are caught by `typeof === "number"` and never reach
+    // Number.isFinite. Only a value that IS a number but is not finite
+    // exercises that guard: Infinity, -Infinity, NaN. JSON cannot carry
+    // NaN/Infinity literals, so build the payload with a replacer-free splice.
+    for (const bad of ["Infinity", "-Infinity", "NaN"]) {
+      localStorage.setItem(
+        "todo-demo:tasks",
+        `[{"id":"x","title":"t","completed":false,"createdAt":${bad}}]`,
+      );
+      // Bare NaN/Infinity are invalid JSON -> the parse guard rejects them.
+      expect(loadTasks()).toEqual([]);
+    }
+  });
+
+  it("rejects an empty id (exercises the id.length guard)", () => {
+    // Found by a mutation sweep, not by review: deleting `t.id.length > 0`
+    // left the whole suite green. An empty id would also collide as a React
+    // key, so the guard is load-bearing and needs its own assertion.
+    const base = { title: "t", completed: false, createdAt: 1 };
+    expect(isTask({ ...base, id: "" })).toBe(false);
+    expect(isTask({ ...base, id: "ok" })).toBe(true);
+    localStorage.setItem(
+      "todo-demo:tasks",
+      '[{"id":"","title":"t","completed":false,"createdAt":1}]',
+    );
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("rejects real non-finite numbers reaching isTask directly", () => {
+    // The honest probe: call the guard with actual JS non-finite numbers,
+    // which is the only way to reach Number.isFinite at all.
+    const base = { id: "x", title: "t", completed: false };
+    expect(isTask({ ...base, createdAt: Number.POSITIVE_INFINITY })).toBe(false);
+    expect(isTask({ ...base, createdAt: Number.NEGATIVE_INFINITY })).toBe(false);
+    expect(isTask({ ...base, createdAt: Number.NaN })).toBe(false);
+    expect(isTask({ ...base, createdAt: 1 })).toBe(true);
+    expect(isTask({ ...base, createdAt: 0 })).toBe(true);
+  });
+});
+
+describe("concurrent writers (round-8 regression)", () => {
+  /**
+   * Lost update = another tab commits between our READ and our WRITE.
+   *
+   * Two earlier attempts at this test were wrong, and both are worth
+   * remembering:
+   *  1. Injecting into our own outgoing setItem payload — the other task
+   *     survives even with buggy code, so the test proves nothing.
+   *  2. Injecting on getItem but RETURNING the pre-injection value — the
+   *     implementation then correctly reads an empty store, so the test
+   *     fails against correct code.
+   *
+   * Correct shape: seed the other tab's commit so it is VISIBLE to our read,
+   * then assert our write preserves it. A stale-snapshot implementation
+   * (read once at module/arg time, write later) drops it.
+   */
+  it("preserves a task another tab committed before our write", () => {
+    // Another tab has already committed its task.
+    saveTasks([
+      { id: "other-tab", title: "FromOtherTab", completed: false, createdAt: 1 },
+    ]);
+    // Our add must merge with what is actually persisted, not clobber it.
+    addTask("Mine");
+    const titles = loadTasks().map((t) => t.title);
+    expect(titles).toContain("FromOtherTab");
+    expect(titles).toContain("Mine");
+  });
+
+  it("merges rather than overwrites when the store changes mid-operation", () => {
+    // Simulate a commit landing after the caller took its snapshot: the
+    // caller hands appendTasks only ITS record, and the store already holds
+    // another tab's. A plain saveTasks([...snapshot, mine]) loses the other.
+    saveTasks([
+      { id: "a", title: "TabA", completed: false, createdAt: 1 },
+    ]);
+    const mine = { id: "b", title: "TabB", completed: false, createdAt: 2 };
+    appendTasks([mine]);
+    expect(loadTasks().map((t) => t.title).sort()).toEqual(["TabA", "TabB"]);
+  });
+
+  it("appendTasks is idempotent on a repeated id", () => {
+    const t = { id: "x", title: "Once", completed: false, createdAt: 1 };
+    appendTasks([t]);
+    appendTasks([t]);
+    expect(loadTasks()).toHaveLength(1);
+  });
+
+  it("re-reads at the write boundary rather than trusting a stale snapshot", () => {
+    // Another tab persists BEFORE our add begins.
+    saveTasks([{ id: "pre", title: "PreExisting", completed: false, createdAt: 1 }]);
+    addTask("New");
+    expect(loadTasks().map((t) => t.title)).toEqual(["PreExisting", "New"]);
+  });
+
+  it("never duplicates a task id under repeated adds", () => {
+    addTask("A");
+    addTask("B");
+    addTask("C");
+    const ids = loadTasks().map((t) => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("sortNewestFirst (TOD-2)", () => {
+  const t = (id: string, createdAt: number): Task => ({
+    id,
+    title: id,
+    completed: false,
+    createdAt,
+  });
+
+  it("returns tasks newest-first (createdAt descending)", () => {
+    const sorted = sortNewestFirst([t("old", 1), t("new", 3), t("mid", 2)]);
+    expect(sorted.map((x) => x.id)).toEqual(["new", "mid", "old"]);
+  });
+
+  it("is stable for equal timestamps (keeps stored order)", () => {
+    const sorted = sortNewestFirst([t("a", 5), t("b", 5), t("c", 5)]);
+    expect(sorted.map((x) => x.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("is pure: does not mutate the input, returns a new array", () => {
+    const input = [t("old", 1), t("new", 2)];
+    const sorted = sortNewestFirst(input);
+    expect(input.map((x) => x.id)).toEqual(["old", "new"]);
+    expect(sorted).not.toBe(input);
+  });
+
+  it("handles an empty list", () => {
+    expect(sortNewestFirst([])).toEqual([]);
+  });
+});
+
+--- src/App.tsx @ b6552652b ---
+import { useRef, useState } from "react";
+import type { FormEvent } from "react";
+import { addTask, loadTasks, sortNewestFirst, type Task } from "./store";
+
+/**
+ * TOD-1 — add a task; TOD-2 — list tasks. Form + list on the store seam
+ * (src/store.ts is the only module touching localStorage). Ordering and the
+ * empty state live here; toggling, deleting and filtering land in TOD-3…5.
+ */
+export default function App() {
+  const [tasks, setTasks] = useState<Task[]>(() => sortNewestFirst(loadTasks()));
+  const [title, setTitle] = useState("");
+  const [rejected, setRejected] = useState(false);
+  const [storageFailed, setStorageFailed] = useState(false);
+  // Polite live region: every successful mutation is announced, not just
+  // errors. A sighted user sees the list change; a screen-reader user must
+  // be told, or the action is silent (round-5 finding).
+  const [announcement, setAnnouncement] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      const task = addTask(title);
+      if (!task) {
+        // AC2: empty/whitespace rejected — no task created, input keeps focus.
+        setRejected(true);
+        inputRef.current?.focus();
+        return;
+      }
+      // Read back from the store, not from React state: another tab may have
+      // persisted tasks since this component last rendered. Spreading stale
+      // `tasks` would silently drop them until reload. Order at the view
+      // boundary so adds and reloads both render newest-first (TOD-2 AC1).
+      const next = sortNewestFirst(loadTasks());
+      setTasks(next);
+      setTitle("");
+      setRejected(false);
+      setStorageFailed(false);
+      // Include the running total: identical live-region text does NOT
+      // re-trigger an announcement, so two tasks with the same title would
+      // otherwise announce only once. The count is both distinct per add and
+      // useful information ("3 tasks" tells the user where they stand).
+      setAnnouncement(
+        `Added ${task.title}. ${next.length} ${next.length === 1 ? "task" : "tasks"}.`,
+      );
+      inputRef.current?.focus();
+    } catch {
+      setStorageFailed(true);
+      inputRef.current?.focus();
+    }
+  }
+
+  return (
+    <main className="app">
+      <header className="app-header">
+        <p className="eyebrow">local-first · no account</p>
+        <h1>To-Do</h1>
+        <p className="tagline">Small steps, written down.</p>
+      </header>
+
+      <form className="add-form" onSubmit={handleSubmit} noValidate>
+        <label className="visually-hidden" htmlFor="new-task">
+          New task
+        </label>
+        <div className={rejected ? "add-row add-row--rejected" : "add-row"}>
+          <input
+            id="new-task"
+            ref={inputRef}
+            className="add-input"
+            type="text"
+            value={title}
+            onChange={(event) => {
+              setTitle(event.target.value);
+              if (rejected) setRejected(false);
+              if (storageFailed) setStorageFailed(false);
+            }}
+            placeholder="What needs doing?"
+            autoComplete="off"
+            autoFocus
+            aria-invalid={rejected}
+            aria-describedby="add-hint"
+          />
+          <button className="add-button" type="submit">
+            Add
+          </button>
+        </div>
+        <p
+          id="add-hint"
+          className={
+            rejected || storageFailed
+              ? "add-hint add-hint--error"
+              : "add-hint"
+          }
+          role={rejected || storageFailed ? "alert" : undefined}
+        >
+          {rejected
+            ? "Give the task a name — blank tasks don’t count."
+            : storageFailed
+              ? "Task couldn’t be saved. Check browser storage and try again."
+              : "Press Enter or hit Add. Everything stays in this browser."}
+        </p>
+      </form>
+
+      {/* Always mounted: a live region added at the same time as its text is
+          frequently missed by screen readers. */}
+      <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </p>
+
+      <section className="list-section" aria-label="Tasks">
+        <p data-testid="task-count" className="task-count">
+          {tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}
+        </p>
+        {tasks.length > 0 ? (
+          <ul className="task-list">
+            {tasks.map((task) => (
+              <li key={task.id} className="task-item">
+                <span className="task-dot" aria-hidden="true" />
+                <span className="task-title">{task.title}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          // TOD-2 AC2/AC5: empty (or corrupt) store renders a friendly line,
+          // never a blank section. Reuses the theme's .tagline — no new CSS.
+          <p data-testid="empty-state" className="tagline">
+            Nothing here yet — add your first task above.
+          </p>
+        )}
+      </section>
+
+      <footer className="app-footer">
+        <p>Saved to this browser only — reload-safe, account-free.</p>
+      </footer>
+    </main>
+  );
+}
+
+--- src/App.test.tsx @ b6552652b ---
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import App from "./App";
+import { loadTasks, saveTasks } from "./store";
+
+beforeEach(() => {
+  localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("TOD-1 — add a task", () => {
+  it("typing + Add creates a visible task", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Buy oat milk");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(screen.getByRole("listitem")).toHaveTextContent("Buy oat milk");
+    expect(input).toHaveValue("");
+    expect(loadTasks().map((t) => t.title)).toEqual(["Buy oat milk"]);
+  });
+
+  it("Enter submits", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Ship the demo{Enter}");
+
+    expect(screen.getByRole("listitem")).toHaveTextContent("Ship the demo");
+    expect(loadTasks().map((t) => t.title)).toEqual(["Ship the demo"]);
+    expect(input).toHaveValue(""); // review nit: assert input clears after submit
+  });
+
+  it("whitespace-only input is rejected and the input keeps focus", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "   ");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(loadTasks()).toEqual([]);
+    expect(input).toHaveFocus();
+  });
+
+  it("empty input is rejected and the input keeps focus", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(loadTasks()).toEqual([]);
+    expect(input).toHaveFocus();
+  });
+
+  it("retains the draft and reports storage failures accessibly", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Keep this draft");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Task couldn’t be saved. Check browser storage and try again.",
+    );
+    expect(input).toHaveValue("Keep this draft");
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("new tasks appear immediately and accumulate in the list", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "First{Enter}");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    await user.type(input, "Second{Enter}");
+
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    // TOD-2 owns render order (newest-first); this test only asserts that
+    // both adds accumulate. Strict ordering is covered by the TOD-2 tests
+    // with fixed timestamps, so same-millisecond adds cannot flake here.
+    const titles = items.map((n) => n.textContent);
+    expect(titles.some((t) => t?.includes("First"))).toBe(true);
+    expect(titles.some((t) => t?.includes("Second"))).toBe(true);
+    expect(input).toHaveFocus();
+  });
+
+  it("reload restores the task (store round-trip)", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    await user.type(
+      screen.getByRole("textbox", { name: /new task/i }),
+      "Persist me{Enter}",
+    );
+    expect(loadTasks().map((t) => t.title)).toEqual(["Persist me"]);
+
+    // Simulate a page reload: tear down the tree, mount fresh from the store.
+    unmount();
+    render(<App />);
+    expect(screen.getByRole("listitem")).toHaveTextContent("Persist me");
+  });
+});
+
+describe("malformed storage does not break mount (round-3 regression)", () => {
+  it("renders the empty state when stored entries are null", () => {
+    localStorage.setItem("todo-demo:tasks", "[null]");
+    render(<App />);
+    expect(screen.getByRole("heading", { name: /to-do/i })).toBeInTheDocument();
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("renders when entries are partial objects", () => {
+    localStorage.setItem("todo-demo:tasks", JSON.stringify([{ id: "x" }]));
+    render(<App />);
+    expect(screen.getByRole("heading", { name: /to-do/i })).toBeInTheDocument();
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("still renders the valid entries alongside malformed ones", () => {
+    localStorage.setItem(
+      "todo-demo:tasks",
+      JSON.stringify([null, { id: "ok", title: "Valid", completed: false, createdAt: 1 }]),
+    );
+    render(<App />);
+    expect(screen.getByRole("listitem")).toHaveTextContent("Valid");
+  });
+});
+
+describe("screen-reader announcements (round-5 regression)", () => {
+  it("exposes a polite live region on mount", () => {
+    render(<App />);
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveAttribute("aria-atomic", "true");
+  });
+
+  it("announces a successful add", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Announce me{Enter}");
+    expect(screen.getByRole("status")).toHaveTextContent("Added Announce me. 1 task.");
+  });
+
+  it("announces each subsequent add", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "First{Enter}");
+    await user.type(input, "Second{Enter}");
+    expect(screen.getByRole("status")).toHaveTextContent("Added Second. 2 tasks.");
+  });
+
+  it("does not announce a rejected empty submit", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("keeps errors on the assertive alert, successes on the polite status", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Doomed{Enter}");
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    vi.restoreAllMocks();
+  });
+});
+
+describe("repeated titles still announce (round-6 regression)", () => {
+  it("changes the live-region text when the same title is added twice", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Same{Enter}");
+    const first = screen.getByRole("status").textContent;
+    await user.type(input, "Same{Enter}");
+    const second = screen.getByRole("status").textContent;
+    expect(second).not.toBe(first);
+    expect(second).toContain("2 tasks");
+  });
+
+  it("announces three identical adds distinctly", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    const seen = new Set<string>();
+    for (let i = 0; i < 3; i += 1) {
+      await user.type(input, "Dup{Enter}");
+      seen.add(screen.getByRole("status").textContent ?? "");
+    }
+    expect(seen.size).toBe(3);
+  });
+});
+
+describe("cross-tab consistency (round-7 regression)", () => {
+  it("includes tasks persisted by another tab after an add", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Mine{Enter}");
+    saveTasks([
+      { id: "other", title: "FromOtherTab", completed: false, createdAt: 1 },
+      { id: "mine", title: "Mine", completed: false, createdAt: 2 },
+    ]);
+    await user.type(input, "Second{Enter}");
+    const items = screen.getAllByRole("listitem").map((n) => n.textContent);
+    expect(items.some((t) => t?.includes("FromOtherTab"))).toBe(true);
+    expect(items.some((t) => t?.includes("Second"))).toBe(true);
+  });
+
+  it("announces the true persisted total, not a stale local count", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    saveTasks([
+      { id: "a", title: "A", completed: false, createdAt: 1 },
+      { id: "b", title: "B", completed: false, createdAt: 2 },
+    ]);
+    await user.type(input, "C{Enter}");
+    expect(screen.getByRole("status")).toHaveTextContent("3 tasks");
+  });
+});
+
+describe("TOD-2 — list tasks", () => {
+  it("renders tasks newest-first (createdAt descending)", () => {
+    // Seed out of order: the view must sort, not trust storage order.
+    saveTasks([
+      { id: "old", title: "Oldest task", completed: false, createdAt: 1 },
+      { id: "new", title: "Newest task", completed: false, createdAt: 3 },
+      { id: "mid", title: "Middle task", completed: false, createdAt: 2 },
+    ]);
+    render(<App />);
+    const titles = screen.getAllByRole("listitem").map((n) => n.textContent);
+    expect(titles).toEqual(["Newest task", "Middle task", "Oldest task"]);
+  });
+
+  it("shows a friendly empty-state message when there are no tasks", () => {
+    render(<App />);
+    expect(screen.getByTestId("empty-state")).toHaveTextContent(
+      /nothing here yet/i,
+    );
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+    expect(screen.queryByRole("list")).toBeNull();
+  });
+
+  it("count matches the task total and updates live on add", async () => {
+    saveTasks([
+      { id: "a", title: "A", completed: false, createdAt: 1 },
+      { id: "b", title: "B", completed: false, createdAt: 2 },
+      { id: "c", title: "C", completed: true, createdAt: 3 },
+    ]);
+    render(<App />);
+    // Count reflects ALL tasks, completed included (filtering is TOD-5).
+    expect(screen.getByTestId("task-count")).toHaveTextContent("3 tasks");
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByRole("textbox", { name: /new task/i }),
+      "One more{Enter}",
+    );
+    expect(screen.getByTestId("task-count")).toHaveTextContent("4 tasks");
+    expect(screen.getAllByRole("listitem")).toHaveLength(4);
+  });
+
+  it("uses singular wording for exactly one task", () => {
+    saveTasks([{ id: "a", title: "Solo", completed: false, createdAt: 1 }]);
+    render(<App />);
+    expect(screen.getByTestId("task-count").textContent).toBe("1 task");
+  });
+
+  it("reload restores the list, newest-first, from the store TOD-1 writes", async () => {
+    // Deterministic clock: each add gets a strictly later createdAt, so the
+    // newest-first assertion cannot flake on same-millisecond adds.
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "First{Enter}");
+    await user.type(input, "Second{Enter}");
+    expect(loadTasks().map((t) => t.title)).toEqual(["First", "Second"]);
+
+    // Simulate a page reload: tear down, mount fresh from the same store.
+    unmount();
+    render(<App />);
+    const titles = screen.getAllByRole("listitem").map((n) => n.textContent);
+    expect(titles).toEqual(["Second", "First"]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
+  });
+
+  it("corrupt stored JSON renders the empty state instead of crashing", () => {
+    localStorage.setItem("todo-demo:tasks", "{definitely not json");
+    render(<App />);
+    expect(screen.getByTestId("empty-state")).toHaveTextContent(
+      /nothing here yet/i,
+    );
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("malformed array entries render the empty state instead of crashing", () => {
+    localStorage.setItem("todo-demo:tasks", "[null, {}, 42, \"str\"]");
+    render(<App />);
+    expect(screen.getByTestId("empty-state")).toHaveTextContent(
+      /nothing here yet/i,
+    );
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+});

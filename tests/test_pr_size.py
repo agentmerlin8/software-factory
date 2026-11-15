@@ -62,8 +62,12 @@ def test_test_classification():
 
 @pytest.mark.skipif(not REPO.exists(), reason="product repo not cloned")
 def test_real_tod1_is_over_budget():
-    """The empirical calibration: this PR took 7+ rounds and must be flagged."""
-    b = check_repo(REPO, "main")
+    """The empirical calibration: this PR took 7+ rounds and must be flagged.
+
+    Pinned to TOD-1's merged head vs the scaffold commit — NOT the live
+    checkout branch, which moves as later stories land (TOD-2 made the
+    unpinned version diff main..tod-2 and silently pass)."""
+    b = check_repo(REPO, "947db84", head="d4297a3")
     assert not b.passed, "TOD-1 (934 lines, 522 CSS) must exceed the budget"
     assert b.visual > 400
     assert "visual/CSS" in b.named_failures()

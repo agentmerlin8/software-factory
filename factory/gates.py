@@ -161,6 +161,14 @@ def pre_review(workdir: Path, *, base: str, manifest: list[str],
     if not bres.passed:
         failures.append(f"boundaries: {bres.named_failures()}")
 
+    # TOD-2 round-1 class: a changed test must FAIL when a boundary guard is
+    # deleted (self-certifying tests pass on the defect). Discovery-driven.
+    from .mutation import boundary_mutants
+    mres = boundary_mutants(Path(workdir), base)
+    checks["boundary_mutants"] = mres.ok
+    if not mres.ok:
+        failures.append(f"boundary_mutants: {mres.verdict}: {mres.detail}")
+
     if any(m.endswith(".css") for m in manifest):
         ok, detail = check_contrast(workdir)
         checks["contrast"] = ok

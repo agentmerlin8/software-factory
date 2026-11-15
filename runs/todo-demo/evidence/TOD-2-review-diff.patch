@@ -1,0 +1,236 @@
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+index b48ca38..5f00cf0 100644
+--- a/src/App.test.tsx
++++ b/src/App.test.tsx
+@@ -87,8 +87,12 @@ describe("TOD-1 — add a task", () => {
+ 
+     const items = screen.getAllByRole("listitem");
+     expect(items).toHaveLength(2);
+-    expect(items[0]).toHaveTextContent("First");
+-    expect(items[1]).toHaveTextContent("Second");
++    // TOD-2 owns render order (newest-first); this test only asserts that
++    // both adds accumulate. Strict ordering is covered by the TOD-2 tests
++    // with fixed timestamps, so same-millisecond adds cannot flake here.
++    const titles = items.map((n) => n.textContent);
++    expect(titles.some((t) => t?.includes("First"))).toBe(true);
++    expect(titles.some((t) => t?.includes("Second"))).toBe(true);
+     expect(input).toHaveFocus();
+   });
+ 
+@@ -234,3 +238,89 @@ describe("cross-tab consistency (round-7 regression)", () => {
+     expect(screen.getByRole("status")).toHaveTextContent("3 tasks");
+   });
+ });
++
++describe("TOD-2 — list tasks", () => {
++  it("renders tasks newest-first (createdAt descending)", () => {
++    // Seed out of order: the view must sort, not trust storage order.
++    saveTasks([
++      { id: "old", title: "Oldest task", completed: false, createdAt: 1 },
++      { id: "new", title: "Newest task", completed: false, createdAt: 3 },
++      { id: "mid", title: "Middle task", completed: false, createdAt: 2 },
++    ]);
++    render(<App />);
++    const titles = screen.getAllByRole("listitem").map((n) => n.textContent);
++    expect(titles).toEqual(["Newest task", "Middle task", "Oldest task"]);
++  });
++
++  it("shows a friendly empty-state message when there are no tasks", () => {
++    render(<App />);
++    expect(screen.getByTestId("empty-state")).toHaveTextContent(
++      /nothing here yet/i,
++    );
++    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
++    expect(screen.queryByRole("list")).toBeNull();
++  });
++
++  it("count matches the task total and updates live on add", async () => {
++    saveTasks([
++      { id: "a", title: "A", completed: false, createdAt: 1 },
++      { id: "b", title: "B", completed: false, createdAt: 2 },
++      { id: "c", title: "C", completed: true, createdAt: 3 },
++    ]);
++    render(<App />);
++    // Count reflects ALL tasks, completed included (filtering is TOD-5).
++    expect(screen.getByTestId("task-count")).toHaveTextContent("3 tasks");
++    const user = userEvent.setup();
++    await user.type(
++      screen.getByRole("textbox", { name: /new task/i }),
++      "One more{Enter}",
++    );
++    expect(screen.getByTestId("task-count")).toHaveTextContent("4 tasks");
++    expect(screen.getAllByRole("listitem")).toHaveLength(4);
++  });
++
++  it("uses singular wording for exactly one task", () => {
++    saveTasks([{ id: "a", title: "Solo", completed: false, createdAt: 1 }]);
++    render(<App />);
++    expect(screen.getByTestId("task-count").textContent).toBe("1 task");
++  });
++
++  it("reload restores the list, newest-first, from the store TOD-1 writes", async () => {
++    // Deterministic clock: each add gets a strictly later createdAt, so the
++    // newest-first assertion cannot flake on same-millisecond adds.
++    let now = 1_000;
++    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
++    const user = userEvent.setup();
++    const { unmount } = render(<App />);
++    const input = screen.getByRole("textbox", { name: /new task/i });
++    await user.type(input, "First{Enter}");
++    await user.type(input, "Second{Enter}");
++    expect(loadTasks().map((t) => t.title)).toEqual(["First", "Second"]);
++
++    // Simulate a page reload: tear down, mount fresh from the same store.
++    unmount();
++    render(<App />);
++    const titles = screen.getAllByRole("listitem").map((n) => n.textContent);
++    expect(titles).toEqual(["Second", "First"]);
++    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
++  });
++
++  it("corrupt stored JSON renders the empty state instead of crashing", () => {
++    localStorage.setItem("todo-demo:tasks", "{definitely not json");
++    render(<App />);
++    expect(screen.getByTestId("empty-state")).toHaveTextContent(
++      /nothing here yet/i,
++    );
++    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
++    expect(screen.queryByRole("listitem")).toBeNull();
++  });
++
++  it("malformed array entries render the empty state instead of crashing", () => {
++    localStorage.setItem("todo-demo:tasks", "[null, {}, 42, \"str\"]");
++    render(<App />);
++    expect(screen.getByTestId("empty-state")).toHaveTextContent(
++      /nothing here yet/i,
++    );
++    expect(screen.queryByRole("listitem")).toBeNull();
++  });
++});
+diff --git a/src/App.tsx b/src/App.tsx
+index 0ba0d74..9fc7922 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,14 +1,14 @@
+ import { useRef, useState } from "react";
+ import type { FormEvent } from "react";
+-import { addTask, loadTasks, type Task } from "./store";
++import { addTask, loadTasks, sortNewestFirst, type Task } from "./store";
+ 
+ /**
+- * TOD-1 — add a task. Form + list on the store seam (src/store.ts is the
+- * only module touching localStorage). Stories TOD-2…TOD-5 extend this
+- * shell; ordering, toggling, deleting and filtering land there.
++ * TOD-1 — add a task; TOD-2 — list tasks. Form + list on the store seam
++ * (src/store.ts is the only module touching localStorage). Ordering and the
++ * empty state live here; toggling, deleting and filtering land in TOD-3…5.
+  */
+ export default function App() {
+-  const [tasks, setTasks] = useState<Task[]>(() => loadTasks());
++  const [tasks, setTasks] = useState<Task[]>(() => sortNewestFirst(loadTasks()));
+   const [title, setTitle] = useState("");
+   const [rejected, setRejected] = useState(false);
+   const [storageFailed, setStorageFailed] = useState(false);
+@@ -30,8 +30,9 @@ export default function App() {
+       }
+       // Read back from the store, not from React state: another tab may have
+       // persisted tasks since this component last rendered. Spreading stale
+-      // `tasks` would silently drop them until reload.
+-      const next = loadTasks();
++      // `tasks` would silently drop them until reload. Order at the view
++      // boundary so adds and reloads both render newest-first (TOD-2 AC1).
++      const next = sortNewestFirst(loadTasks());
+       setTasks(next);
+       setTitle("");
+       setRejected(false);
+@@ -111,7 +112,7 @@ export default function App() {
+         <p data-testid="task-count" className="task-count">
+           {tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}
+         </p>
+-        {tasks.length > 0 && (
++        {tasks.length > 0 ? (
+           <ul className="task-list">
+             {tasks.map((task) => (
+               <li key={task.id} className="task-item">
+@@ -120,6 +121,12 @@ export default function App() {
+               </li>
+             ))}
+           </ul>
++        ) : (
++          // TOD-2 AC2/AC5: empty (or corrupt) store renders a friendly line,
++          // never a blank section. Reuses the theme's .tagline — no new CSS.
++          <p data-testid="empty-state" className="tagline">
++            Nothing here yet — add your first task above.
++          </p>
+         )}
+       </section>
+ 
+diff --git a/src/store.test.ts b/src/store.test.ts
+index aaff605..4849022 100644
+--- a/src/store.test.ts
++++ b/src/store.test.ts
+@@ -8,7 +8,9 @@ import {
+   loadFilter,
+   saveFilter,
+   newId,
++  sortNewestFirst,
+   subscribe,
++  type Task,
+ } from "./store";
+ 
+ beforeEach(() => {
+@@ -261,3 +263,33 @@ describe("concurrent writers (round-8 regression)", () => {
+     expect(new Set(ids).size).toBe(ids.length);
+   });
+ });
++
++describe("sortNewestFirst (TOD-2)", () => {
++  const t = (id: string, createdAt: number): Task => ({
++    id,
++    title: id,
++    completed: false,
++    createdAt,
++  });
++
++  it("returns tasks newest-first (createdAt descending)", () => {
++    const sorted = sortNewestFirst([t("old", 1), t("new", 3), t("mid", 2)]);
++    expect(sorted.map((x) => x.id)).toEqual(["new", "mid", "old"]);
++  });
++
++  it("is stable for equal timestamps (keeps stored order)", () => {
++    const sorted = sortNewestFirst([t("a", 5), t("b", 5), t("c", 5)]);
++    expect(sorted.map((x) => x.id)).toEqual(["a", "b", "c"]);
++  });
++
++  it("is pure: does not mutate the input, returns a new array", () => {
++    const input = [t("old", 1), t("new", 2)];
++    const sorted = sortNewestFirst(input);
++    expect(input.map((x) => x.id)).toEqual(["old", "new"]);
++    expect(sorted).not.toBe(input);
++  });
++
++  it("handles an empty list", () => {
++    expect(sortNewestFirst([])).toEqual([]);
++  });
++});
+diff --git a/src/store.ts b/src/store.ts
+index 7fae857..356e869 100644
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -75,6 +75,16 @@ export function saveTasks(tasks: Task[]): void {
+   emit();
+ }
+ 
++/**
++ * TOD-2 — newest-first ordering. Pure: returns a new array, never mutates
++ * the input (loadTasks hands out fresh arrays, but callers may hold their
++ * own). Array.prototype.sort is stable (ES2019+), so tasks sharing a
++ * createdAt keep their stored order — no secondary tiebreaker needed.
++ */
++export function sortNewestFirst(tasks: Task[]): Task[] {
++  return [...tasks].sort((a, b) => b.createdAt - a.createdAt);
++}
++
+ /**
+  * Append records with the read and the write in ONE synchronous step.
+  *
