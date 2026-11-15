@@ -1,6 +1,11 @@
 # HANDOFF — Software Factory rewrite
 
 **For a fresh session picking up remotely. Read this first, then the docs.**
+
+> **SKEL-1 is IN FLIGHT** — TOD-1 merged with Copilot approval; TOD-2 next.
+> Read `HANDOFF-SKEL1.md` for the live experiment state and the gates built
+> during the review loop. OC-17 (Copilot approval required, <5 review rounds,
+> PR-size budget) was ratified 2026-11-15.
 Last updated: 2026-11-14 · repo HEAD `97d6ddd` · `main` == `origin/main`, clean.
 
 ## 0. Cold start (do this before anything else)
@@ -91,7 +96,7 @@ Obsidian renders beyond one status file. Full vision = north star, post-v1.
 
 | Issue | Item | Status | Stage | Next |
 |---|---|---|---|---|
-| #3 | SKEL-1 walking skeleton + control arm | In Progress | Planning | the first build |
+| #3 | SKEL-1 walking skeleton + control arm | In Progress | Coding | TOD-1 merged (11 rounds, Copilot APPROVED); TOD-2 next — see HANDOFF-SKEL1.md |
 | #4 | SKEL-2 intake spike | Backlog | Planning | highest product risk |
 | #5 | SKEL-3 controller-writer security | Backlog | Planning | |
 | #6 | SKEL-4 merge protocol | Backlog | Planning | verify via EXP-1 first |
