@@ -315,3 +315,29 @@ facts for SKEL-4 (from EXP-3):
 - `enforce_admins: true` blocks direct pushes to main (GH006); factory
   merges go through PRs, so this is fine, but scaffolding must know it.
 The controller-enforced amendment proposed after EXP-1 is WITHDRAWN.
+
+## OC-17 — Copilot approval is a required gate; PR size is budgeted — CLOSED
+
+**Decision (Randy, 2026-11-15):** "Copilot approval should be required the whole
+way through. We are going to have to tune our PR sizes so we don't get in a loop
+on a large PR that could go 20 rounds. The ideal stat is less than 5 review
+rounds."
+
+- **Copilot approval is a REQUIRED merge gate for every factory story**, not an
+  optional signal. This SUPERSEDES the OC-9 default ("Copilot review is not a
+  factory gate by default") for this workspace. The controller requests it,
+  waits for it, and dispositions every finding before the human merge gate.
+- **Target: fewer than 5 review rounds per PR.** Round count is a first-class
+  metric in the findings log; a PR exceeding it is a PROCESS DEFECT to be
+  root-caused, not absorbed.
+- **PR size is budgeted at planning time** (`factory/pr_size.py`), because
+  review rounds scale with review SURFACE, not with story value:
+  ≤400 changed lines · ≤120 lines of visual/CSS churn · ≤6 files.
+- **Unrequested visual work is the primary offender.** Evidence (TOD-1):
+  1031-line diff, 522 lines of unrequested theme CSS, **6 of 10 Copilot findings
+  landed in that CSS**, 7+ rounds without approval. Theming gets its own story
+  with its own ACs, or is cut.
+- Approval mechanics (verified 2026-11-15): repo Settings → Copilot → Code
+  review → Auto-approval must be ON (UI-only, not API-settable); an approval is
+  DISMISSED on new commits, so every fix push needs a fresh request. Enabled on
+  `software-factory` and `factory-todo-demo`.

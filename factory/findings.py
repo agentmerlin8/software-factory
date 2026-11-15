@@ -195,6 +195,19 @@ class FindingsLog:
                 b["real"] += 1
         return dict(out)
 
+    def rounds_per_pr(self) -> dict[tuple[str, int], int]:
+        """Highest round observed per PR — the OC-17 headline metric."""
+        out: dict[tuple[str, int], int] = {}
+        for r in self.read():
+            k = (r["repo"], r["pr"])
+            out[k] = max(out.get(k, 0), r["round"])
+        return out
+
+    def over_round_target(self, target: int = 5) -> list[tuple[str, int, int]]:
+        """PRs at/over the owner's round target — process defects to root-cause."""
+        return [(repo, pr, n) for (repo, pr), n in sorted(self.rounds_per_pr().items())
+                if n >= target]
+
     def by_source(self) -> Counter:
         return Counter(r["source"] for r in self.read())
 
@@ -211,6 +224,12 @@ class FindingsLog:
                   "| class | count | meaning |", "|---|---|---|"]
         for k, n in self.by_class().most_common():
             lines.append(f"| `{k}` | {n} | {CLASSES.get(k, '')} |")
+
+        lines += ["", "## Rounds per PR (OC-17 target: fewer than 5)", "",
+                  "| repo | PR | rounds | vs target |", "|---|---|---|---|"]
+        for (repo, pr), n in sorted(self.rounds_per_pr().items()):
+            verdict = "OVER — process defect" if n >= 5 else "within target"
+            lines.append(f"| {repo} | #{pr} | {n} | {verdict} |")
 
         lines += ["", "## Escape rate by round (are we improving?)", "",
                   "| round | findings | escaped gate | escaped review | fixed |",

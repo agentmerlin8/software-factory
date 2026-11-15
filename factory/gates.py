@@ -140,6 +140,13 @@ def pre_review(workdir: Path, *, base: str, manifest: list[str],
     if not ok:
         failures.append(f"secrets: {detail}")
 
+    # OC-17: review surface is budgeted so a PR converges in <5 rounds.
+    from .pr_size import check_repo as check_size
+    sres = check_size(Path(workdir), base)
+    checks["pr_size"] = sres.passed
+    if not sres.passed:
+        failures.append(f"pr_size: {sres.named_failures()}")
+
     # Round-5 class: successful mutations must be announced, not just errors.
     from .announcements import check_tree as check_announcements
     ares = check_announcements(Path(workdir))

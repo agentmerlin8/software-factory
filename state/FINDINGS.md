@@ -1,6 +1,6 @@
 # Review findings — mined view
 
-14 findings · 1 repo(s) · 1 PR(s)
+15 findings · 1 repo(s) · 1 PR(s)
 
 ## Recurring classes (what keeps coming back)
 
@@ -17,6 +17,13 @@
 | `stale-live-region` | 1 | Live region text unchanged, so no re-announcement |
 | `test-gap` | 1 | Named test does not assert the acceptance criterion |
 | `scope-creep` | 1 | Unrequested work shipped without its own ACs |
+| `other` | 1 | Unclassified — add a class when a pattern recurs |
+
+## Rounds per PR (OC-17 target: fewer than 5)
+
+| repo | PR | rounds | vs target |
+|---|---|---|---|
+| agentmerlin8/factory-todo-demo | #1 | 7 | OVER — process defect |
 
 ## Escape rate by round (are we improving?)
 
@@ -28,6 +35,7 @@
 | 4 | 2 | 2 | 2 | 2 |
 | 5 | 1 | 1 | 1 | 1 |
 | 6 | 1 | 1 | 1 | 1 |
+| 7 | 1 | 1 | 1 | 1 |
 
 ## Classes with NO deterministic check yet
 
@@ -41,7 +49,7 @@ _Each of these is a gate-extension candidate: the next occurrence is preventable
 
 | source | real defects | refuted by execution | precision |
 |---|---|---|---|
-| copilot | 10 | 0 | 100% |
+| copilot | 11 | 0 | 100% |
 | cross-family | 2 | 2 | 50% |
 
 _Precision here means 'survived execution', not 'was useful' — a refuted claim still costs a verification cycle._

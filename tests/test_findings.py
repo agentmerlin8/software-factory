@@ -130,3 +130,13 @@ def test_different_round_is_a_new_finding(tmp_path):
     log.append(_f(summary="same wording", round=1))
     log.append(_f(summary="same wording", round=2))
     assert len(log.read()) == 2
+
+
+def test_rounds_per_pr_and_target(tmp_path):
+    log = FindingsLog(tmp_path / "f.jsonl")
+    for rnd in (1, 2, 3, 4, 5, 6):
+        log.append(_f(round=rnd, summary=f"f{rnd}"))
+    log.append(_f(pr=2, round=2, summary="other"))
+    assert log.rounds_per_pr() == {("o/r", 1): 6, ("o/r", 2): 2}
+    assert log.over_round_target() == [("o/r", 1, 6)]
+    assert "OC-17" in log.render()
