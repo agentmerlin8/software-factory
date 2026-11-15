@@ -1,0 +1,547 @@
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+index 5eb2652..f3da710 100644
+--- a/src/App.test.tsx
++++ b/src/App.test.tsx
+@@ -639,3 +639,243 @@ describe("TOD-3 — complete / uncomplete", () => {
+     expect(screen.queryByRole("alert")).toBeNull();
+   });
+ });
++
++describe("TOD-4 — delete a task", () => {
++  const seedTwo = () =>
++    saveTasks([
++      { id: "a", title: "Write the tests", completed: false, createdAt: 1 },
++      { id: "b", title: "Ship the story", completed: false, createdAt: 2 },
++    ]);
++
++  it("AC1: every task has a delete control named for its task", () => {
++    seedTwo();
++    render(<App />);
++    const buttons = screen.getAllByRole("button", { name: /^delete/i });
++    expect(buttons).toHaveLength(2);
++    expect(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    ).toBeInTheDocument();
++    expect(
++      screen.getByRole("button", { name: /delete.*Write the tests/i }),
++    ).toBeInTheDocument();
++  });
++
++  it("AC2: delete removes the task from the list and the store, count updates", async () => {
++    seedTwo();
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    expect(screen.getAllByRole("listitem")).toHaveLength(1);
++    expect(screen.getByRole("listitem")).toHaveTextContent("Write the tests");
++    expect(loadTasks().map((t) => t.id)).toEqual(["a"]);
++    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
++    // Newest-first order holds through deletion (TOD-2 AC1).
++    await user.type(
++      screen.getByRole("textbox", { name: /new task/i }),
++      "Newer{Enter}",
++    );
++    expect(
++      screen.getAllByRole("listitem").map((n) => n.textContent),
++    ).toEqual(["Newer", "Write the tests"]);
++  });
++
++  it("AC3: deletion survives reload (fresh mount reads the store)", async () => {
++    seedTwo();
++    const user = userEvent.setup();
++    const { unmount } = render(<App />);
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    expect(loadTasks().map((t) => t.id)).toEqual(["a"]);
++
++    // Simulate a page reload: tear down, mount fresh from the same store.
++    unmount();
++    render(<App />);
++    expect(screen.getAllByRole("listitem")).toHaveLength(1);
++    expect(screen.getByRole("listitem")).toHaveTextContent("Write the tests");
++    expect(
++      screen.queryByRole("button", { name: /delete.*Ship the story/i }),
++    ).toBeNull();
++  });
++
++  it("AC4: deleting the last task returns to the TOD-2 empty state", async () => {
++    saveTasks([{ id: "solo", title: "Last one", completed: false, createdAt: 1 }]);
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Last one/i }),
++    );
++    expect(screen.queryByRole("listitem")).toBeNull();
++    expect(screen.queryByRole("list")).toBeNull();
++    expect(screen.getByTestId("empty-state")).toHaveTextContent(
++      /nothing here yet/i,
++    );
++    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
++    expect(loadTasks()).toEqual([]);
++  });
++
++  it("deletions are announced in the polite live region, distinctly", async () => {
++    saveTasks([
++      { id: "a", title: "Same name", completed: false, createdAt: 1 },
++      { id: "b", title: "Same name", completed: false, createdAt: 2 },
++    ]);
++    const user = userEvent.setup();
++    render(<App />);
++    const buttons = screen.getAllByRole("button", { name: /delete.*Same name/i });
++    await user.click(buttons[0]);
++    const first = screen.getByRole("status").textContent;
++    expect(first).toMatch(/Deleted Same name/i);
++    expect(first).toMatch(/1 task/);
++    await user.click(screen.getByRole("button", { name: /delete.*Same name/i }));
++    const second = screen.getByRole("status").textContent;
++    // Same title twice must still re-announce: the count distinguishes.
++    expect(second).not.toBe(first);
++    expect(second).toMatch(/0 tasks/);
++    // Wording differs from add/toggle announcements (operation-specific).
++    expect(second).not.toMatch(/^Added|^Completed|^Marked/);
++  });
++
++  it("AC5: storage throws on delete -> task stays visible, accessible error", async () => {
++    seedTwo();
++    const user = userEvent.setup();
++    render(<App />);
++    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
++      throw new DOMException("Quota exceeded", "QuotaExceededError");
++    });
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    // No silent data loss: the task remains in the list AND the store.
++    expect(screen.getAllByRole("listitem")).toHaveLength(2);
++    expect(loadTasks().map((t) => t.id)).toEqual(["a", "b"]);
++    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
++    // No success announcement for a delete that never happened.
++    expect(screen.getByRole("status")).toHaveTextContent("");
++    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
++  });
++
++  it("AC5: a storage READ failure during delete surfaces the alert", async () => {
++    seedTwo();
++    const user = userEvent.setup();
++    render(<App />);
++    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
++      throw new DOMException("Storage disabled", "SecurityError");
++    });
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
++    expect(screen.getAllByRole("listitem")).toHaveLength(2);
++  });
++
++  it("a delete storage failure is not masked by a pending blank-input rejection", async () => {
++    seedTwo();
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: /^add$/i }));
++    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
++    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
++      throw new DOMException("Quota exceeded", "QuotaExceededError");
++    });
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
++    expect(screen.getAllByRole("listitem")).toHaveLength(2);
++  });
++
++  it("a successful delete clears a prior storage-failure alert", async () => {
++    seedTwo();
++    const user = userEvent.setup();
++    render(<App />);
++    const spy = vi
++      .spyOn(Storage.prototype, "setItem")
++      .mockImplementation(() => {
++        throw new DOMException("Quota exceeded", "QuotaExceededError");
++      });
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    expect(screen.getByRole("alert")).toBeInTheDocument();
++    spy.mockRestore();
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    expect(screen.queryByRole("alert")).toBeNull();
++    expect(screen.getAllByRole("listitem")).toHaveLength(1);
++  });
++
++  it("a POST-WRITE read failure keeps the committed list visible", async () => {
++    // The delete commits; only a later read fails. Rendering from the
++    // committed snapshot keeps the remaining task, count and announcement
++    // truthful instead of wiping the list (same contract as TOD-3 round-3).
++    seedTwo();
++    const user = userEvent.setup();
++    render(<App />);
++    const realGet = Storage.prototype.getItem;
++    let gets = 0;
++    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
++      this: Storage, key: string,
++    ) {
++      if (key === "todo-demo:tasks") {
++        gets += 1;
++        if (gets >= 3) {
++          throw new DOMException("Storage disabled", "SecurityError");
++        }
++      }
++      return realGet.call(this, key);
++    });
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    expect(screen.getAllByRole("listitem")).toHaveLength(1);
++    expect(screen.getByRole("listitem")).toHaveTextContent("Write the tests");
++    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
++    expect(screen.getByRole("status")).toHaveTextContent(/Deleted Ship the story/);
++    expect(screen.queryByRole("alert")).toBeNull();
++  });
++
++  it("delete includes tasks another tab committed (committed-snapshot render)", async () => {
++    seedTwo();
++    const user = userEvent.setup();
++    render(<App />);
++    // Another tab commits before our delete; the store must merge, and the
++    // rendered list must come from the committed snapshot.
++    saveTasks([
++      ...loadTasks(),
++      { id: "other", title: "FromOtherTab", completed: false, createdAt: 3 },
++    ]);
++    await user.click(
++      screen.getByRole("button", { name: /delete.*Ship the story/i }),
++    );
++    const titles = screen.getAllByRole("listitem").map((n) => n.textContent);
++    expect(titles).toEqual(["FromOtherTab", "Write the tests"]);
++    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
++  });
++
++  it("delete control carries the theme's opaque focus ring", async () => {
++    const style = document.createElement("style");
++    style.textContent = themeCss;
++    document.head.appendChild(style);
++    try {
++      seedTwo();
++      render(<App />);
++      const user = userEvent.setup();
++      // autoFocus starts on the input; keyboard Tab activates :focus-visible.
++      await user.tab(); // Add
++      await user.tab(); // newest checkbox
++      await user.tab(); // newest delete button
++      const button = screen.getByRole("button", {
++        name: /delete.*Ship the story/i,
++      });
++      expect(button).toHaveFocus();
++      const s = getComputedStyle(button);
++      expect(s.outlineStyle).toBe("solid");
++      expect(s.outlineColor).toBe("rgb(178, 62, 2)");
++    } finally {
++      style.remove();
++    }
++  });
++});
+diff --git a/src/App.tsx b/src/App.tsx
+index 6d99ea5..c066511 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,12 +1,19 @@
+ import { useRef, useState } from "react";
+ import type { FormEvent } from "react";
+-import { addTask, loadTasks, sortNewestFirst, toggleTask, type Task } from "./store";
++import {
++  addTask,
++  deleteTask,
++  loadTasks,
++  sortNewestFirst,
++  toggleTask,
++  type Task,
++} from "./store";
+ 
+ /**
+- * TOD-1 — add a task; TOD-2 — list tasks; TOD-3 — complete/uncomplete.
+- * Form + list on the store seam (src/store.ts is the only module touching
+- * localStorage). Ordering and the empty state live here; deleting and
+- * filtering land in TOD-4…5.
++ * TOD-1 — add a task; TOD-2 — list tasks; TOD-3 — complete/uncomplete;
++ * TOD-4 — delete a task. Form + list on the store seam (src/store.ts is
++ * the only module touching localStorage). Ordering and the empty state
++ * live here; filtering lands in TOD-5.
+  */
+ export default function App() {
+   const [tasks, setTasks] = useState<Task[]>(() => sortNewestFirst(loadTasks()));
+@@ -85,6 +92,31 @@ export default function App() {
+     }
+   }
+ 
++  function handleDelete(id: string) {
++    try {
++      const result = deleteTask(id);
++      if (!result) return;
++      // Render from the COMMITTED snapshot — no post-write readback, same
++      // contract as toggle (a fallible read after a successful save can
++      // wipe the visible list).
++      const next = sortNewestFirst(result.tasks);
++      setTasks(next);
++      setStorageFailed(false);
++      // Operation-specific wording plus the remaining count: two deletes
++      // of same-title tasks must still re-announce (identical live-region
++      // text never fires twice — same class as the add/toggle findings).
++      setAnnouncement(
++        `Deleted ${result.task.title}. ${next.length} ${next.length === 1 ? "task" : "tasks"} left.`,
++      );
++    } catch {
++      // AC5: `tasks` is untouched, so the row stays visible while the store
++      // still holds it — no silent loss. Shared assertive alert; clear the
++      // blank-input flag first so it cannot mask the storage error.
++      setRejected(false);
++      setStorageFailed(true);
++    }
++  }
++
+   return (
+     <main className="app">
+       <header className="app-header">
+@@ -169,6 +201,16 @@ export default function App() {
+                 <label className="task-title" htmlFor={`task-toggle-${task.id}`}>
+                   {task.title}
+                 </label>
++                {/* TOD-4 AC1: per-task delete, named for screen readers via
++                    aria-label; the ✕ glyph is CSS content so the row's text
++                    stays the task title alone. type="button" — never submits
++                    the add form. */}
++                <button
++                  type="button"
++                  className="task-delete"
++                  aria-label={`Delete ${task.title}`}
++                  onClick={() => handleDelete(task.id)}
++                />
+               </li>
+             ))}
+           </ul>
+diff --git a/src/index.css b/src/index.css
+index 224df25..54931fc 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -380,6 +380,20 @@ h1::after {
+   color: var(--ink-soft);
+ }
+ 
++/* TOD-4 delete control. */
++.task-delete {
++  margin-left: auto;
++  padding: 0.1rem 0.45rem;
++  font: 600 0.95rem/1.4 var(--sans);
++  color: var(--danger); /* ~5.6:1 on raised surface, light and dark (AA) */
++  background: none; border: 0; cursor: pointer;
++}
++.task-delete::before { content: "✕"; }
++.task-delete:focus-visible {
++  outline: 2px solid var(--focus-indicator);
++  outline-offset: 2px;
++}
++
+ /* ── Footer ────────────────────────────────────────────────────── */
+ 
+ .app-footer {
+diff --git a/src/store.test.ts b/src/store.test.ts
+index 7127f6b..50e4a87 100644
+--- a/src/store.test.ts
++++ b/src/store.test.ts
+@@ -8,6 +8,7 @@ import {
+   loadFilter,
+   saveFilter,
+   newId,
++  deleteTask,
+   sortNewestFirst,
+   subscribe,
+   toggleTask,
+@@ -441,3 +442,147 @@ describe("toggleTask (TOD-3)", () => {
+     expect(() => toggleTask("a")).toThrow();
+   });
+ });
++
++describe("deleteTask (TOD-4)", () => {
++  const seedThree = () =>
++    saveTasks([
++      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
++      { id: "b", title: "Beta", completed: true, createdAt: 2 },
++      { id: "c", title: "Gamma", completed: false, createdAt: 3 },
++    ]);
++
++  it("removes only the target task and persists the remainder", () => {
++    seedThree();
++    const result = deleteTask("b");
++    expect(result).not.toBeNull();
++    expect(result?.task).toEqual({
++      id: "b", title: "Beta", completed: true, createdAt: 2,
++    });
++    expect(result?.tasks.map((t) => t.id)).toEqual(["a", "c"]);
++    expect(loadTasks().map((t) => t.id)).toEqual(["a", "c"]);
++    // The returned snapshot IS what was committed — callers render from it.
++    expect(result?.tasks).toEqual(loadTasks());
++  });
++
++  it("deleting an absent id is a no-op: null, no write, no notification", () => {
++    seedThree();
++    const before = localStorage.getItem("todo-demo:tasks");
++    const setSpy = vi.spyOn(Storage.prototype, "setItem");
++    let calls = 0;
++    const unsubscribe = subscribe(() => {
++      calls += 1;
++    });
++    expect(deleteTask("missing")).toBeNull();
++    expect(setSpy).not.toHaveBeenCalled();
++    expect(localStorage.getItem("todo-demo:tasks")).toBe(before);
++    expect(calls).toBe(0);
++    unsubscribe();
++  });
++
++  it("deleting the last task persists an empty list", () => {
++    saveTasks([{ id: "solo", title: "Only", completed: false, createdAt: 1 }]);
++    const result = deleteTask("solo");
++    expect(result?.tasks).toEqual([]);
++    expect(loadTasks()).toEqual([]);
++    expect(localStorage.getItem("todo-demo:tasks")).toBe("[]");
++  });
++
++  it("preserves tasks another tab committed before our write", () => {
++    seedThree();
++    saveTasks([
++      ...loadTasks(),
++      { id: "other", title: "FromOtherTab", completed: false, createdAt: 4 },
++    ]);
++    const result = deleteTask("b");
++    expect(result?.tasks.map((t) => t.id).sort()).toEqual(["a", "c", "other"]);
++    expect(loadTasks().map((t) => t.id).sort()).toEqual(["a", "c", "other"]);
++  });
++
++  it("merges a commit landing between the first read and the write", () => {
++    // Same closable window as the toggle round-1 probe: a commit injected
++    // after the first getItem and before the write-boundary re-read must
++    // survive. A stale-snapshot overwrite drops it.
++    saveTasks([{ id: "a", title: "Target", completed: false, createdAt: 1 }]);
++    const realGet = Storage.prototype.getItem;
++    const realSet = Storage.prototype.setItem;
++    let gets = 0;
++    const spy = vi
++      .spyOn(Storage.prototype, "getItem")
++      .mockImplementation(function (this: Storage, key: string) {
++        if (key === "todo-demo:tasks") {
++          gets += 1;
++          if (gets === 2) {
++            const other = {
++              id: "other-tab", title: "theirs", completed: false, createdAt: 99,
++            };
++            const current = JSON.parse(realGet.call(this, key) || "[]");
++            realSet.call(this, key, JSON.stringify([...current, other]));
++          }
++        }
++        return realGet.call(this, key);
++      });
++    const result = deleteTask("a");
++    spy.mockRestore();
++    expect(result?.tasks.map((t) => t.id)).toEqual(["other-tab"]);
++    expect(loadTasks().map((t) => t.title)).toEqual(["theirs"]);
++  });
++
++  it("returns null when another tab removed the target between reads", () => {
++    saveTasks([{ id: "a", title: "Gone soon", completed: false, createdAt: 1 }]);
++    const realGet = Storage.prototype.getItem;
++    const realSet = Storage.prototype.setItem;
++    let gets = 0;
++    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
++      this: Storage, key: string,
++    ) {
++      if (key === "todo-demo:tasks") {
++        gets += 1;
++        if (gets === 2) realSet.call(this, key, "[]");
++      }
++      return realGet.call(this, key);
++    });
++    expect(deleteTask("a")).toBeNull();
++  });
++
++  it("notifies subscribers once per successful delete, never on a no-op", () => {
++    seedThree();
++    let calls = 0;
++    const unsubscribe = subscribe(() => {
++      calls += 1;
++    });
++    deleteTask("a");
++    expect(calls).toBe(1);
++    deleteTask("missing");
++    expect(calls).toBe(1);
++    unsubscribe();
++    deleteTask("b");
++    expect(calls).toBe(1);
++  });
++
++  it("propagates storage WRITE failures without mutating storage or notifying", () => {
++    seedThree();
++    const before = loadTasks();
++    let calls = 0;
++    const unsubscribe = subscribe(() => {
++      calls += 1;
++    });
++    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
++      throw new DOMException("Quota exceeded", "QuotaExceededError");
++    });
++    expect(() => deleteTask("b")).toThrow();
++    expect(loadTasks()).toEqual(before);
++    expect(calls).toBe(0);
++    unsubscribe();
++  });
++
++  it("propagates storage READ errors (strict mutation read)", () => {
++    seedThree();
++    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
++      throw new DOMException("Storage disabled", "SecurityError");
++    });
++    // Tolerant load still renders empty; the mutation path must surface the
++    // access failure instead of silently treating it as "unknown id".
++    expect(loadTasks()).toEqual([]);
++    expect(() => deleteTask("b")).toThrow();
++  });
++});
+diff --git a/src/store.ts b/src/store.ts
+index 0b46c48..045c048 100644
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -208,3 +208,31 @@ export function toggleTask(id: string): ToggleResult | null {
+   emit();
+   return { task: toggled, tasks: committed };
+ }
++
++/**
++ * TOD-4 — remove one task by id. Same write-boundary discipline as
++ * toggleTask: strict read for the existence check (access errors
++ * propagate), re-read immediately before setItem so a concurrent tab's
++ * committed task survives, and the COMMITTED snapshot is returned for
++ * rendering — no post-write readback. Returns null when the id is unknown
++ * (no write, no notification). A storage failure propagates BEFORE emit,
++ * so the task is never gone from the UI while still in the store, or vice
++ * versa (AC5).
++ */
++export interface DeleteResult {
++  task: Task;
++  /** The exact list committed by this write; callers render from THIS. */
++  tasks: Task[];
++}
++
++export function deleteTask(id: string): DeleteResult | null {
++  const current = readTasksStrict();
++  if (!current.some((t) => t.id === id)) return null;
++  const fresh = readTasksStrict();
++  const removed = fresh.find((t) => t.id === id);
++  if (!removed) return null; // removed by another tab between reads
++  const committed = fresh.filter((t) => t.id !== id);
++  localStorage.setItem(STORAGE_KEY, JSON.stringify(committed));
++  emit();
++  return { task: removed, tasks: committed };
++}
