@@ -199,6 +199,33 @@ def cmd_dispatch(args) -> int:
     return 0 if res.ok else 1
 
 
+def cmd_intake(args) -> int:
+    """Guided intake state machine (SKEL-2 INT-1, harness-agnostic OC-7)."""
+    from . import intake
+    root = Path(args.root)
+    try:
+        if args.intake_cmd == "start":
+            s = intake.start_session(root, description=args.description)
+            print(json.dumps({"session_id": s.session_id, "status": s.status}))
+        elif args.intake_cmd == "answer":
+            answers = json.loads(args.answers)
+            s = intake.answer_questions(root, args.session, answers)
+            print(json.dumps({"session_id": s.session_id, "status": s.status}))
+        elif args.intake_cmd == "generate":
+            path = intake.generate_prd(root, args.session)
+            print(json.dumps({"prd": str(path), "status": "prd_ready"}))
+        elif args.intake_cmd == "status":
+            s = intake.IntakeSession.load(root, args.session)
+            print(json.dumps(s.to_dict(), indent=2))
+    except intake.IntakeError as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
+    except json.JSONDecodeError as exc:
+        print(f"REFUSED: --answers is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="factory", description="SKEL-1 control plane")
     p.add_argument("--version", action="version", version=__version__)
@@ -263,6 +290,18 @@ def main(argv: list[str] | None = None) -> int:
     dp.add_argument("--skip-spec-check", action="store_true",
                     help="bypass planning checks (audited escape hatch)")
     dp.set_defaults(fn=cmd_dispatch)
+
+    it = sub.add_parser("intake", help="guided intake state machine (SKEL-2, OC-7)")
+    it.add_argument("--root", default="runs/intake",
+                    help="directory holding intake sessions")
+    itsub = it.add_subparsers(dest="intake_cmd", required=True)
+    i_start = itsub.add_parser("start"); i_start.add_argument("--description", required=True)
+    i_ans = itsub.add_parser("answer")
+    i_ans.add_argument("--session", required=True)
+    i_ans.add_argument("--answers", required=True, help="JSON object of category->answer")
+    i_gen = itsub.add_parser("generate"); i_gen.add_argument("--session", required=True)
+    i_stat = itsub.add_parser("status"); i_stat.add_argument("--session", required=True)
+    it.set_defaults(fn=cmd_intake)
 
     args = p.parse_args(argv)
     return args.fn(args)
