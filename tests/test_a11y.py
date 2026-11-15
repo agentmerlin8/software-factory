@@ -151,3 +151,37 @@ def test_translucent_wash_still_fails_when_text_is_weak():
     findings = audit(WASH_CSS, checks)
     assert len(findings) == 2  # both themes
     assert all(0.0 < f.ratio < 4.5 for f in findings)
+
+
+# --- control-arm false-failure class: literal-hex rule-level dark overrides ---
+# No CSS variables: colors are literal hex, redeclared per rule in @media dark.
+LITERAL_CSS = """
+body { background: #f7f1e5; }
+.error { color: #b42318; }
+@media (prefers-color-scheme: dark) {
+  body { background: #16171d; }
+  .error { color: #fda29b; }
+}
+"""
+
+
+def test_literal_hex_dark_override_not_false_failed():
+    # .error light #b42318 on #f7f1e5 passes; dark #fda29b on #16171d passes.
+    # Without rule-level dark resolution the gate measured the LIGHT hex on
+    # the DARK backdrop (2.72:1) and false-failed. Both themes must pass.
+    checks = [ContrastCheck(".error (on page)", "#b42318", "#f7f1e5",
+                            selector=".error", inherited_bg=True)]
+    findings = audit(LITERAL_CSS, checks)
+    assert findings == [], [str(f) for f in findings]
+
+
+def test_literal_hex_dark_override_still_fails_when_dark_color_weak():
+    # Fail-closed direction: a dark override that is itself too weak must fail.
+    css = LITERAL_CSS.replace(".error { color: #fda29b; }",
+                              ".error { color: #5a2a26; }")
+    checks = [ContrastCheck(".error (on page)", "#b42318", "#f7f1e5",
+                            selector=".error", inherited_bg=True)]
+    findings = audit(css, checks)
+    assert len(findings) == 1
+    assert findings[0].theme == "dark"
+    assert findings[0].ratio < 4.5

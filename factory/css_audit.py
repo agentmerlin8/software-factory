@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from .a11y import (ContrastCheck, GradientCheck, NonTextCheck, SelectionCheck,
                    audit, audit_gradients, audit_non_text, audit_selection,
-                   dark_blocks, theme_variables)
+                   dark_blocks, dark_rule_overrides, theme_variables)
 
 _RULE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.S)
 _COLOR = re.compile(r"(?:^|;)\s*color\s*:\s*([^;]+)", re.S)
@@ -67,15 +67,19 @@ def _strip_comments(css: str) -> str:
     return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
 
 
-def _root_background(css: str) -> str:
+def _root_background(css: str, dark: bool = False) -> str:
     """The page backdrop for rules that declare no background of their own.
 
     A layered body background (decorative radial washes over a solid base)
     must resolve to the SOLID base — picking the first var() grabs a
     translucent wash and every inherited-text check then measures garbage.
     Prefer an explicit solid token; fall back to the last opaque layer.
+
+    For literal-hex themes the body background is redeclared per rule inside
+    @media dark; when dark=True, apply that rule-level override so the dark
+    backdrop is measured (not the baked light hex).
     """
-    v = theme_variables(css, dark=False)
+    v = theme_variables(css, dark=dark)
     for token in ("--paper", "--bg", "--surface"):
         if token in v:
             val = v[token].strip()
@@ -85,19 +89,28 @@ def _root_background(css: str) -> str:
                 return f"var({token})"
             if val.startswith("var("):
                 return val
+    # Literal-hex path: read the body background, applying dark rule overrides.
+    body_bg = None
     m = re.search(r"\bbody\s*\{([^{}]*)\}", css, re.S)
     if m:
         bg = _BG.search(m.group(1))
         if bg:
-            val = bg.group(1).strip()
-            if val.startswith("#"):
-                return val
-            # last declared var() in a layered background is the base layer
-            refs = _VAR_REF.findall(val)
-            for ref in reversed(refs):
-                cand = v.get(ref, "")
-                if cand.strip().startswith("#"):
-                    return f"var({ref})"
+            body_bg = bg.group(1).strip()
+    if dark:
+        over = dark_rule_overrides(css).get("body", {})
+        if "background" in over:
+            body_bg = over["background"]
+    if body_bg:
+        if body_bg.startswith("#"):
+            return body_bg
+        if body_bg.startswith("var("):
+            return body_bg
+        # last declared var() in a layered background is the base layer
+        refs = _VAR_REF.findall(body_bg)
+        for ref in reversed(refs):
+            cand = v.get(ref, "")
+            if cand.strip().startswith("#"):
+                return f"var({ref})"
     return "#ffffff"
 
 
@@ -115,6 +128,10 @@ def discover(css: str) -> Discovery:
     css = _strip_comments(css)
     # Exclude the dark @media block from rule walking: theme_variables already
     # overlays those declarations, and walking them twice double-counts.
+    # dark_blocks must run on the SAME stripped text — a block extracted from
+    # raw CSS (comments intact) never matches the stripped walkable, so dark
+    # overrides leak into the light walk and get re-measured against the dark
+    # backdrop (TOD-5 control-arm false failure: .error 2.72:1).
     walkable = css
     for blk in dark_blocks(css):
         walkable = walkable.replace(blk, "")
@@ -179,7 +196,8 @@ def discover(css: str) -> Discovery:
             key = (sel, fg.group(1).strip(), bg_val)
             if key not in seen_flat:
                 seen_flat.add(key)
-                d.flat.append(ContrastCheck(sel, fg.group(1).strip(), bg_val))
+                d.flat.append(ContrastCheck(sel, fg.group(1).strip(), bg_val,
+                                            selector=sel))
             continue
 
         # --- text with an inherited background ---
@@ -190,7 +208,8 @@ def discover(css: str) -> Discovery:
             key = (sel, val, page_bg)
             if key not in seen_flat:
                 seen_flat.add(key)
-                d.flat.append(ContrastCheck(f"{sel} (on page)", val, page_bg))
+                d.flat.append(ContrastCheck(f"{sel} (on page)", val, page_bg,
+                                            selector=sel, inherited_bg=True))
 
     return d
 

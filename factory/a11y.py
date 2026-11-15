@@ -137,17 +137,55 @@ def theme_variables(css: str, *, dark: bool) -> dict[str, str]:
     return base
 
 
+_RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.S)
+_COLOR_DECL = re.compile(r"(?:^|;)\s*color\s*:\s*([^;]+)", re.S)
+_BG_DECL = re.compile(r"(?:^|;)\s*background(?:-color)?\s*:\s*([^;]+)", re.S)
+
+
+def dark_rule_overrides(css: str) -> dict[str, dict[str, str]]:
+    """Per-selector color/background overrides declared inside dark @media.
+
+    Literal-hex themes (no CSS variables) redeclare colors per rule in a dark
+    block, e.g. `.error { color:#b42318 }` light and `.error { color:#fda29b }`
+    dark. theme_variables only overlays :root custom properties, so without
+    this the audit measures the LIGHT hex against the DARK backdrop and
+    false-fails (control-arm .error 2.72:1, actually ~9:1). Returns
+    {normalized_selector: {"color": val, "background": val}} for dark rules.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for blk in dark_blocks(css):
+        for sel_raw, body in _RULE_RE.findall(blk):
+            sel = " ".join(sel_raw.split())
+            if not sel or sel.startswith("@") or sel == ":root":
+                continue
+            entry = out.setdefault(sel, {})
+            c = _COLOR_DECL.search(body)
+            if c:
+                entry["color"] = c.group(1).strip()
+            b = _BG_DECL.search(body)
+            if b:
+                entry["background"] = b.group(1).strip()
+    return out
+
+
 @dataclass
 class ContrastCheck:
     """One foreground/background pairing to audit.
 
     `fg`/`bg` may be a token name (--ink-faint), a var() expression, or hex.
     `large_text` relaxes the threshold to 3:1 (>=18.66px bold or >=24px).
+    `selector` (when set) lets the audit apply rule-level dark @media color
+    overrides for this exact selector — literal-hex themes redeclare colors
+    per rule rather than via variables.
     """
     label: str
     fg: str
     bg: str
     large_text: bool = False
+    selector: str | None = None
+    # True when bg is the inherited page backdrop (rule declares no background).
+    # The audit re-resolves it per theme so literal-hex dark body overrides apply.
+    inherited_bg: bool = False
 
     @property
     def threshold(self) -> float:
@@ -225,19 +263,34 @@ def audit(css: str, checks: list[ContrastCheck]) -> list[ContrastFinding]:
     (TOD-5: the pressed filter button's 9%-alpha wash actually passes AA).
     """
     from .css_audit import _root_background
-    page_bg = _root_background(css)
+    dark_over = dark_rule_overrides(css)
     findings: list[ContrastFinding] = []
     for dark in (False, True):
         variables = theme_variables(css, dark=dark)
         theme = "dark" if dark else "light"
+        page_bg = _root_background(css, dark=dark)
         backdrop = _resolve_rgba(page_bg, variables) or (255, 255, 255, 1.0)
         backdrop_rgb = composite(backdrop, (255, 255, 255))
         for chk in checks:
-            fg = _resolve_rgba(chk.fg, variables)
-            bg = _resolve_rgba(chk.bg, variables)
+            fg_val, bg_val = chk.fg, chk.bg
+            # Inherited background: re-resolve the page backdrop per theme so
+            # literal-hex dark body overrides apply (not the baked light hex).
+            if chk.inherited_bg:
+                bg_val = page_bg
+            # Rule-level dark overrides: literal-hex themes redeclare colors
+            # per selector inside @media dark. Apply them so we measure the
+            # DARK color, not the light hex on the dark backdrop.
+            if dark and chk.selector:
+                over = dark_over.get(" ".join(chk.selector.split()), {})
+                if "color" in over:
+                    fg_val = over["color"]
+                if "background" in over:
+                    bg_val = over["background"]
+            fg = _resolve_rgba(fg_val, variables)
+            bg = _resolve_rgba(bg_val, variables)
             if not fg or not bg:
                 findings.append(ContrastFinding(
-                    theme=theme, label=chk.label, fg=chk.fg, bg=chk.bg,
+                    theme=theme, label=chk.label, fg=fg_val, bg=bg_val,
                     ratio=0.0, threshold=chk.threshold))
                 continue
             bg_rgb = composite(bg, backdrop_rgb)
