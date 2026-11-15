@@ -56,14 +56,17 @@ engineer who is NOT the owner approves, in tolerable time.
   approval + time + questions asked + rework rounds. Write the result to
   `docs/experiments/skel-2-intake-<date>.md`.
 
-## The open question for the owner
+## The engineer-test decision (Randy, 2026-11-15)
 
-**Who is the non-owner engineer?** Acceptance requires ≥1 engineer who is
-not Randy to approve the PRD. Options: a colleague Randy invites, or a
-fresh-context agent persona acting as an independent engineer reviewer
-(weaker evidence — same model family blind spots, but measures the
-artifact's clarity). The human test is the real signal; the agent persona
-is a fallback if no human is available this week.
+**DECIDED: fresh-context agent engineer persona** as the PRD reviewer —
+weaker evidence than a human (same-model-family blind spots possible),
+but unblocks the spike now. The persona gets ONLY the PRD + Storybook
+URL + the original plain description (never the intake conversation —
+context isolation), reviews as an independent engineer, and returns
+approve / request-changes with reasons. Approval + time recorded.
+**Caveat recorded in the experiment writeup:** this measures the
+artifact's clarity to a fresh reader, NOT human acceptance; a real
+non-owner engineer test remains the stronger follow-up when available.
 
 ## What this spike does NOT build (OC-13 cuts)
 
