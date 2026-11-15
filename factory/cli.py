@@ -226,6 +226,30 @@ def cmd_intake(args) -> int:
     return 0
 
 
+def cmd_controller(args) -> int:
+    """Validate + append an agent submission (SKEL-3 SEC-1, OC-14).
+
+    The controller is the sole state-repo writer. Runs no model output,
+    no product code — pure validation + append. Refuses fail-closed.
+    """
+    from .controller import append_submission, ControllerError
+    import json as _json
+    try:
+        submission = _json.loads(Path(args.submission).read_text(encoding="utf-8"))
+        policy = None
+        if args.policy:
+            policy = _json.loads(Path(args.policy).read_text(encoding="utf-8"))
+        rows = append_submission(Ledger(Path(args.ledger)), submission, policy)
+        print(json.dumps({"appended": len(rows), "ledger": args.ledger}))
+        return 0
+    except ControllerError as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, _json.JSONDecodeError) as exc:
+        print(f"REFUSED: cannot read submission/policy: {exc}", file=sys.stderr)
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="factory", description="SKEL-1 control plane")
     p.add_argument("--version", action="version", version=__version__)
@@ -302,6 +326,12 @@ def main(argv: list[str] | None = None) -> int:
     i_gen = itsub.add_parser("generate"); i_gen.add_argument("--session", required=True)
     i_stat = itsub.add_parser("status"); i_stat.add_argument("--session", required=True)
     it.set_defaults(fn=cmd_intake)
+
+    ct = sub.add_parser("controller", help="validate + append an agent submission (SKEL-3, OC-14)")
+    ct.add_argument("--ledger", required=True)
+    ct.add_argument("--submission", required=True, help="path to submission JSON")
+    ct.add_argument("--policy", default=None, help="path to controller policy JSON")
+    ct.set_defaults(fn=cmd_controller)
 
     args = p.parse_args(argv)
     return args.fn(args)

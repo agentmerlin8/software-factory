@@ -73,13 +73,14 @@ serialized writer.
 
 - 2 App creations (manifest confirmation click each) + 2 repo-scoped
   installs. I'll stage the manifest helper and hand you the exact clicks.
-- The state repo itself: OC-8 says dedicated state repo (vault-shaped).
-  For v1 the `software-factory` repo's `runs/` + `state/` dirs ARE the
-  state store (SKEL-1 precedent). **Decision needed:** keep state in
-  software-factory for v1 (simplest; controller workflow lives there) or
-  stand up the dedicated state repo now. Recommendation: keep in
-  software-factory for v1, split later — the security model is identical
-  either way, and OC-13 cuts team/org scope.
+- The state repo itself: **DECIDED (Randy, 2026-11-15): keep state in
+  software-factory for v1** (`runs/` + `state/`, SKEL-1 precedent). The
+  controller workflow lives there; the dedicated state-repo split (OC-8)
+  comes later per OC-13. The security model is identical either way:
+  factory-agent is not installed on software-factory's STATE paths —
+  enforcement is via the controller-only write path + CODEOWNERS on
+  runs/ + state/, since the agent App needs repo access for product work
+  in sibling repos but gets NO install on software-factory itself.
 
 ## What this does NOT build (cuts)
 
