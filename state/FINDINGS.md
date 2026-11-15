@@ -1,6 +1,6 @@
 # Review findings — mined view
 
-15 findings · 1 repo(s) · 1 PR(s)
+18 findings · 1 repo(s) · 1 PR(s)
 
 ## Recurring classes (what keeps coming back)
 
@@ -8,6 +8,7 @@
 |---|---|---|
 | `contrast-text` | 3 | Text below WCAG AA 4.5:1 against its background |
 | `false-positive` | 2 | Reviewer claim refuted by execution (not a real defect) |
+| `self-certifying-test` | 2 | Regression test passes on the defective code (proves nothing) |
 | `unhandled-io-failure` | 1 | I/O failure uncaught: action aborts, no feedback |
 | `untrusted-boundary` | 1 | External data parsed without element validation |
 | `contrast-gradient-state` | 1 | Text on a gradient/interactive state below 4.5:1 |
@@ -18,12 +19,13 @@
 | `test-gap` | 1 | Named test does not assert the acceptance criterion |
 | `scope-creep` | 1 | Unrequested work shipped without its own ACs |
 | `other` | 1 | Unclassified — add a class when a pattern recurs |
+| `concurrency-lost-update` | 1 | Interleaved read-modify-write drops a committed record |
 
 ## Rounds per PR (OC-17 target: fewer than 5)
 
 | repo | PR | rounds | vs target |
 |---|---|---|---|
-| agentmerlin8/factory-todo-demo | #1 | 7 | OVER — process defect |
+| agentmerlin8/factory-todo-demo | #1 | 10 | OVER — process defect |
 
 ## Escape rate by round (are we improving?)
 
@@ -36,6 +38,9 @@
 | 5 | 1 | 1 | 1 | 1 |
 | 6 | 1 | 1 | 1 | 1 |
 | 7 | 1 | 1 | 1 | 1 |
+| 8 | 1 | 1 | 1 | 1 |
+| 9 | 1 | 1 | 1 | 1 |
+| 10 | 1 | 1 | 1 | 1 |
 
 ## Classes with NO deterministic check yet
 
@@ -49,7 +54,7 @@ _Each of these is a gate-extension candidate: the next occurrence is preventable
 
 | source | real defects | refuted by execution | precision |
 |---|---|---|---|
-| copilot | 11 | 0 | 100% |
+| copilot | 14 | 0 | 100% |
 | cross-family | 2 | 2 | 50% |
 
 _Precision here means 'survived execution', not 'was useful' — a refuted claim still costs a verification cycle._
