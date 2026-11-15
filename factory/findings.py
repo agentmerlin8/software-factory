@@ -43,6 +43,7 @@ CLASSES = {
     "silent-mutation": "State change not announced to assistive tech",
     "stale-live-region": "Live region text unchanged, so no re-announcement",
     "test-gap": "Named test does not assert the acceptance criterion",
+    "self-certifying-test": "Regression test passes on the defective code (proves nothing)",
     "false-positive": "Reviewer claim refuted by execution (not a real defect)",
     "state-integrity": "Duplicate/racy mutation corrupts state",
     "concurrency-lost-update": "Interleaved read-modify-write drops a committed record",
@@ -63,6 +64,10 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
                                       r"isArray|null.{0,20}crash|corrupt", re.I)),
     ("unhandled-io-failure", re.compile(r"storage.{0,30}(fail|full|quota|block)|throws?|uncaught|"
                                         r"persistence.{0,20}fail", re.I)),
+    ("self-certifying-test", re.compile(
+        r"test.{0,60}(mask|bypass|allow\w*.{0,20}unsafe|does not reproduce|"
+        r"would (still )?pass|passes? (even|despite))|"
+        r"(mask|bypass)\w*.{0,40}test", re.I)),
     ("test-gap", re.compile(r"test.{0,40}(does not|doesn't|missing|never assert)|regression test", re.I)),
     ("concurrency-lost-update", re.compile(r"concurren\w*|interleav|lost update|"
                                            r"cross.?tab|clobber|race condition", re.I)),
