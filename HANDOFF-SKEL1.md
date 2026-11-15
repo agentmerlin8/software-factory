@@ -1,4 +1,4 @@
-# HANDOFF — SKEL-1 in flight (TOD-1 merged, TOD-2 awaiting human merge)
+# HANDOFF — SKEL-1 in flight (TOD-1/2/3 merged, TOD-4 awaiting human merge)
 
 **Updated:** 2026-11-15 · supersedes the work-item table in `HANDOFF.md` §5.
 **Read `HANDOFF.md` first** for cold-start, decisions, board IDs, conventions.
@@ -6,16 +6,25 @@
 ## Where the experiment stands
 
 SKEL-1 (issue #3) = 5 to-do stories through the factory + a control arm.
-**Story 1 of 5 is DONE. Story 2 is CONVERGED — Copilot APPROVED at `488c661`,
-PR #2, CI green, 0 unresolved threads, mergeStateStatus CLEAN. Waiting on
-Randy's merge (mode 1).** Stories 3–5, the control arm, and the kill-criterion
-comparison remain.
+**Stories 1–3 of 5 are MERGED. Story 4 is CONVERGED — Copilot APPROVED at
+`91dc0f1`, PR #4, CI green, 0 unresolved threads, mergeStateStatus CLEAN.
+Waiting on Randy's merge (mode 1).** Story 5, the control arm, and the
+kill-criterion comparison remain.
 
-- Product repo: `agentmerlin8/factory-todo-demo` (public), main `d4297a3`.
+- Product repo: `agentmerlin8/factory-todo-demo` (public), main `503e8c0`.
   Local clone: `~/.hermes/cache/scratch/factory-exp/todo-demo`.
 - Run state: `runs/todo-demo/` (ledger.jsonl, design.md, stories/, dispatch/, evidence/).
 - Findings log: `state/findings.jsonl` + generated `state/FINDINGS.md`.
 - Control repo (not created yet): `agentmerlin8/factory-todo-control`.
+
+## Story outcomes so far
+
+| Story | Rounds | Merged | Notes |
+|---|---|---|---|
+| TOD-1 add | 11 | `d4297a3` | calibration case: 522 unrequested CSS lines drove 6/10 findings |
+| TOD-2 list | 2 | `1a29e3c` | OC-17 sizing held (166 lines, 0 CSS); cross-family EXECUTED claim refuted by execution |
+| TOD-3 toggle | 4 | `503e8c0` | storage-failure class dominated (6/10 findings); committed-snapshot contract born here |
+| TOD-4 delete | 4 | pending | 2/7 findings were defects in the prior round's own remediation |
 
 ## TOD-1 outcome
 
@@ -66,23 +75,26 @@ Use `.venv/bin/python` (pytest lives there).
    → Auto-approval), UI-only, off by default, dismissed on new commits. Enabled
    on both repos. `requestReviewsByLogin` GraphQL is the re-request that registers.
 
-## Next action: merge TOD-2, then TOD-3
+## Next action: merge TOD-4, then TOD-5
 
-**TOD-2 outcome (2026-11-15):** PR #2 converged in **2 rounds** (target <5).
-166 lines / 4 files / **0 CSS** — OC-17 sizing held. Round 1 (pre-PR,
-cross-family): PASS-WITH-NITS; M1 self-certifying test fixed + mutation-proven;
-N3 deferred to TOD-5. Round 2 (Copilot): real test-gap — deleting the post-add
-sort left 55/55 green; fixed @488c661, mutation-proven. **The cross-family
-reviewer's "EXECUTED" claim on that mutation was REFUTED by execution —
-correction logged; trust findings, verify execution labels.** Gate extended:
-`boundary_mutants` (per-test isolation; masked null-led payloads are
-reviewer-lens territory — evidence/TOD-2-gate-extension-proof.py).
-**Randy merges PR #2 (squash). Then verify squash tree == approved head,
-record human_merged + story_done, and dispatch TOD-3.**
+**TOD-4 outcome (2026-11-15):** PR #4 converged in **4 rounds** (target <5).
+Round 1 (pre-PR, cross-family): stale rejection alert on successful
+delete/toggle — fixed both paths, and the recurring class (TOD-2/3/4) was
+closed deterministically: `announcements.check_stale_alert_flags` requires
+every alert-gating flag cleared on every mutation success path
+(fail-before/pass-after proven). Rounds 2–3 (Copilot): stale row when
+another tab already deleted the task; focus lost when the focused delete
+button is removed; then a hole in that very fix (survivor button not
+mounted yet — React batching). All probe-verified, fixed @91dc0f1.
+**2 of 7 findings were defects in the previous round's remediation —
+every fix needs its own adversarial pass.**
+**Randy merges PR #4 (squash). Then verify squash tree == approved head,
+record human_merged + story_done, and dispatch TOD-5.**
 
-Then TOD-3 (complete), TOD-4 (delete), TOD-5 (filter), then the control arm
-(same 5 stories, ONE `hermes -z` session, same model + design doc), then
-`factory metrics` → COMPARISON.md → go/no-go against OC-16.
+TOD-5 (filter) spec already carries the N3 carry-forward from TOD-2
+(`loadFilter` try/catch). After TOD-5: the control arm (same 5 stories,
+ONE `hermes -z` session, same model + design doc), then `factory metrics`
+→ COMPARISON.md → go/no-go against OC-16.
 
 ## Board
 
