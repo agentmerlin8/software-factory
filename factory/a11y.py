@@ -16,12 +16,45 @@ from dataclasses import dataclass
 
 WCAG_AA_NORMAL = 4.5
 WCAG_AA_LARGE = 3.0
+WCAG_NON_TEXT = 3.0
 
 _VAR_DECL = re.compile(r"(--[A-Za-z0-9-]+)\s*:\s*([^;{}]+)")
 _VAR_USE = re.compile(r"var\(\s*(--[A-Za-z0-9-]+)\s*(?:,\s*([^)]*))?\)")
 _HEX = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+_RGBA = re.compile(r"^rgba?\(([^)]+)\)$")
 _DARK_BLOCK = re.compile(
     r"prefers-color-scheme:\s*dark[^{]*\{(.*?)\n\s*\}", re.S)
+
+
+def dark_blocks(css: str) -> list[str]:
+    """Bodies of ALL dark @media blocks, by balanced braces.
+
+    Two failure modes this avoids: a non-greedy regex stops at the first inner
+    '}' (leaking later rules), and taking only the FIRST block leaks every
+    subsequent dark block into the light-theme walk.
+    """
+    out: list[str] = []
+    for m in re.finditer(r"@media[^{]*prefers-color-scheme:\s*dark[^{]*\{", css):
+        i = m.end()
+        depth = 1
+        j = i
+        while j < len(css):
+            if css[j] == "{":
+                depth += 1
+            elif css[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    out.append(css[i:j])
+                    break
+            j += 1
+        else:
+            out.append(css[i:])
+    return out
+
+
+def dark_block(css: str) -> str:
+    """Concatenated bodies of every dark @media block (see dark_blocks)."""
+    return "\n".join(dark_blocks(css))
 
 
 def _channel(c: int) -> float:
@@ -41,6 +74,34 @@ def contrast_ratio(fg: str, bg: str) -> float:
     a, b = luminance(fg), luminance(bg)
     hi, lo = max(a, b), min(a, b)
     return (hi + 0.05) / (lo + 0.05)
+
+
+def parse_rgba(value: str) -> tuple[int, int, int, float] | None:
+    """Parse rgb()/rgba() into (r,g,b,alpha). Returns None for other forms."""
+    m = _RGBA.match(value.strip())
+    if not m:
+        return None
+    parts = [p.strip() for p in m.group(1).replace("/", ",").split(",") if p.strip()]
+    if len(parts) < 3:
+        return None
+    try:
+        rgb = tuple(int(float(p)) for p in parts[:3])
+        alpha = float(parts[3]) if len(parts) > 3 else 1.0
+    except ValueError:
+        return None
+    return (*rgb, alpha)  # type: ignore[return-value]
+
+
+def composite(fg: tuple[int, int, int, float],
+              bg: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Source-over alpha compositing.
+
+    Round-4 root cause: a translucent focus ring's contrast is meaningless
+    until it is composited over its REAL backdrop. rgba(...,0.35) measured
+    1.61:1, not the ~4:1 its opaque base color would suggest.
+    """
+    a = fg[3]
+    return tuple(round(fg[i] * a + bg[i] * (1 - a)) for i in range(3))  # type: ignore[return-value]
 
 
 def resolve_color(value: str, variables: dict[str, str],
@@ -65,12 +126,14 @@ def resolve_color(value: str, variables: dict[str, str],
 
 def theme_variables(css: str, *, dark: bool) -> dict[str, str]:
     """Light (:root) variables, optionally overlaid with the dark-theme block."""
-    m = _DARK_BLOCK.search(css)
-    dark_block = m.group(1) if m else ""
-    light_css = css.replace(dark_block, "") if dark_block else css
+    blocks = dark_blocks(css)
+    light_css = css
+    for blk in blocks:
+        light_css = light_css.replace(blk, "")
     base = {k: v.strip() for k, v in _VAR_DECL.findall(light_css)}
-    if dark and dark_block:
-        base.update({k: v.strip() for k, v in _VAR_DECL.findall(dark_block)})
+    if dark:
+        for blk in blocks:
+            base.update({k: v.strip() for k, v in _VAR_DECL.findall(blk)})
     return base
 
 
@@ -211,3 +274,82 @@ def audit_gradients(css: str,
                     fg=fg_hex, bg=f"{a_hex}->{b_hex}", ratio=worst,
                     threshold=chk.threshold))
     return findings
+
+
+@dataclass
+class NonTextCheck:
+    """A focus indicator / UI boundary: WCAG 2.2 non-text contrast needs 3:1.
+
+    `fg` may be translucent — it is composited over `bg` before measuring.
+    """
+    label: str
+    fg: str
+    bg: str
+    threshold: float = WCAG_NON_TEXT
+
+
+@dataclass
+class SelectionCheck:
+    """::selection text — normal text rules apply (4.5:1)."""
+    label: str
+    fg: str
+    bg: str
+    threshold: float = WCAG_AA_NORMAL
+
+
+def _resolve_rgba(value: str, variables: dict[str, str],
+                  _depth: int = 0) -> tuple[int, int, int, float] | None:
+    if _depth > 12 or value is None:
+        return None
+    value = value.strip()
+    m = _VAR_USE.fullmatch(value)
+    if m:
+        name, fallback = m.group(1), m.group(2)
+        if name in variables:
+            got = _resolve_rgba(variables[name], variables, _depth + 1)
+            if got:
+                return got
+        if fallback:
+            return _resolve_rgba(fallback, variables, _depth + 1)
+        return None
+    hexed = resolve_color(value, variables, _depth)
+    if hexed:
+        return (*_hex_to_rgb(hexed), 1.0)  # type: ignore[return-value]
+    return parse_rgba(value)
+
+
+def audit_non_text(css: str,
+                   checks: list[NonTextCheck]) -> list[ContrastFinding]:
+    """Audit focus indicators and other non-text UI against 3:1.
+
+    Translucent colors are alpha-composited over the declared backdrop first.
+    """
+    findings: list[ContrastFinding] = []
+    for dark in (False, True):
+        variables = theme_variables(css, dark=dark)
+        theme = "dark" if dark else "light"
+        for chk in checks:
+            fg = _resolve_rgba(chk.fg, variables)
+            bg = _resolve_rgba(chk.bg, variables)
+            if not fg or not bg:
+                findings.append(ContrastFinding(
+                    theme=theme, label=chk.label, fg=chk.fg, bg=chk.bg,
+                    ratio=0.0, threshold=chk.threshold))
+                continue
+            bg_rgb = composite(bg, (255, 255, 255))
+            fg_rgb = composite(fg, bg_rgb)
+            r = ratio_rgb(fg_rgb, bg_rgb)
+            if r < chk.threshold:
+                note = f" (alpha {fg[3]})" if fg[3] < 1.0 else ""
+                findings.append(ContrastFinding(
+                    theme=theme, label=f"{chk.label}{note}",
+                    fg=f"rgb{fg_rgb}", bg=f"rgb{bg_rgb}", ratio=r,
+                    threshold=chk.threshold))
+    return findings
+
+
+def audit_selection(css: str,
+                    checks: list[SelectionCheck]) -> list[ContrastFinding]:
+    """Audit ::selection text pairs (4.5:1) across themes."""
+    return audit_non_text(css, [
+        NonTextCheck(c.label, c.fg, c.bg, c.threshold) for c in checks])

@@ -87,39 +87,28 @@ def check_secrets(workdir: Path, base: str) -> tuple[bool, str]:
 
 def check_contrast(workdir: Path, css_rel: str = "src/index.css",
                    checks: list | None = None) -> tuple[bool, str]:
-    """Deterministic WCAG contrast gate (PRE-1).
+    """Deterministic WCAG gate — DISCOVERY-DRIVEN (rounds 2-4 lesson).
 
-    Contrast is arithmetic, not judgment — an LLM reviewer passed 9 failing
-    pairs on TOD-1 as "cosmetic". This computes them instead.
+    Earlier versions enumerated selectors, so each review round surfaced one
+    more nobody had listed (::selection, then focus outlines). Now the audit
+    set is derived from the stylesheet itself: every text pair, gradient
+    control, selection pair, and focus indicator, in both themes, with
+    translucent colors alpha-composited over their real backdrop.
     """
-    from .a11y import ContrastCheck, GradientCheck, audit, audit_gradients
+    from .css_audit import audit_stylesheet, discover
 
     css_path = Path(workdir) / css_rel
     if not css_path.exists():
         return True, f"no {css_rel}; contrast gate skipped"
-    if checks is None:
-        checks = [
-            ContrastCheck("placeholder", "var(--ink-faint)", "var(--surface-raised)"),
-            ContrastCheck("add-hint", "var(--ink-faint)", "var(--paper)"),
-            ContrastCheck("task-count", "var(--ink-faint)", "var(--paper)"),
-            ContrastCheck("footer", "var(--ink-faint)", "var(--paper)"),
-            ContrastCheck("body", "var(--ink)", "var(--paper)"),
-        ]
     css_text = css_path.read_text(encoding="utf-8")
-    findings = audit(css_text, checks)
-    # Round-3 blind spot: gradient-filled controls under hover/active filters.
-    grad_checks = [
-        GradientCheck("add-button", "var(--btn-label)",
-                      "var(--btn-fill-from)", "var(--btn-fill-to)"),
-    ]
-    # only audit gradients whose tokens actually exist in this stylesheet
-    grad_checks = [g for g in grad_checks
-                   if "--btn-fill-from" in css_text]
-    findings += audit_gradients(css_text, grad_checks)
+    findings = audit_stylesheet(css_text)
     if findings:
         return False, "; ".join(str(f) for f in findings)
-    return True, (f"{len(checks)} flat pairings + {len(grad_checks)} gradient "
-                  f"controls x 2 themes x states pass WCAG AA")
+    d = discover(css_text)
+    return True, (f"{d.total()} discovered pairings "
+                  f"({len(d.flat)} text, {len(d.gradients)} gradient, "
+                  f"{len(d.selections)} selection, {len(d.focus)} focus) "
+                  f"x 2 themes pass WCAG AA")
 
 
 def pre_review(workdir: Path, *, base: str, manifest: list[str],
