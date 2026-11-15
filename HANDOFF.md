@@ -11,7 +11,8 @@ git fetch -q origin && git status -sb        # expect: clean, main == origin/mai
 gh issue list --repo agentmerlin8/software-factory --state open
 ```
 
-- Repo: `agentmerlin8/software-factory` (PRIVATE), local `~/Work/software-factory`.
+- Repo: `agentmerlin8/software-factory` (**PUBLIC** since 2026-11-14, Randy's call —
+  public+Free unlocks branch protection; see EXP-3), local `~/Work/software-factory`.
 - Old repo `agentmerlin8/ai-software-factory` is PRIVATE, kept as a read-only
   salvage source. Do NOT refactor it.
 - Board: https://github.com/orgs/agentmerlin8/projects/5 (org project #5).
@@ -100,14 +101,18 @@ Obsidian renders beyond one status file. Full vision = north star, post-v1.
 | #1, #2 | Fable reviews 1 & 2 | Done | Done | dispositioned |
 
 **Recommended next action:** build SKEL-1 (walking skeleton + control arm).
-EXP-1/EXP-2 are DONE (2026-11-14) — results in `docs/experiments/`. Key
-findings that shape the build: (a) Free plan has NO native up-to-date gate —
-OC-15's strict check must be controller-enforced (amendment pending owner
-ratification); (b) GITHUB_TOKEN approvals are org-blocked, App approvals work;
-(c) controller App needs `checks: write` added; (d) Actions concurrency
-cancels pending runs — controller needs retry/requeue. The org is on the
-**Free plan** — private-repo branch protection/rulesets return 403 (verified).
-The controller-writer model (OC-14) is designed to NOT depend on branch protection.
+EXP-1/EXP-2/EXP-3 are DONE (2026-11-14) — results in `docs/experiments/`.
+Key findings that shape the build: (a) repo is now PUBLIC (Randy's call) —
+public+Free unlocks branch protection/rulesets/strict up-to-date gate
+(EXP-3 verified: stale merge refused 405, updated passes); OC-15's original
+mechanism stands, controller workaround withdrawn; (b) GITHUB_TOKEN
+approvals are org-blocked, App approvals work; (c) controller App needs
+`checks: write` added; (d) Actions concurrency cancels pending runs —
+controller needs retry/requeue; (e) SKEL-4 must register a REAL required
+status check — `strict:true` with an empty checks list is a no-op.
+The org stays **Free**; the controller-writer model (OC-14) still holds
+(agents never hold state-repo write tokens), with branch protection now
+available as defense-in-depth.
 
 ## 6. Board mechanics (IDs for scripting)
 
