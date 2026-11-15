@@ -15,6 +15,11 @@
 - src/App.test.tsx
 - src/index.css
 
+CSS scope (OC-17): reuse existing classes. Filter controls may need ONE
+minimal rule set (target ≤15 CSS lines, contrast-safe in both themes,
+themed opaque :focus-visible ring on any focusable control). No restyling,
+no theme variants.
+
 ## Design slice
 - Filter state via `loadFilter`/`saveFilter` in the store seam.
 - CARRY-FORWARD (TOD-2 review N3, deferred): `loadFilter` currently has no
@@ -23,6 +28,21 @@
 - Filtering is a pure function (testable) over tasks + filter.
 - The count now reflects the filtered set (changes TOD-2's total count).
 - TDD: tests first, verify red, implement green.
+
+## Contracts from TOD-3/TOD-4 (the review loop will check each)
+- Any NEW mutation path uses `readTasksStrict` (propagate storage ACCESS
+  errors), re-reads + merges by id at the write boundary, and returns the
+  COMMITTED snapshot for rendering — no post-write readback. (Filter
+  switching itself must NOT write task data — AC4.)
+- Every successful mutation is announced in the polite live region with
+  text that differs per operation; filter switches announce the new view
+  and its count. Failures use the shared assertive alert.
+- Every flag gating the conditional assertive alert (`rejected`,
+  `storageFailed`) must be cleared on EVERY mutation/filter success path —
+  the deterministic gate now enforces this (stale-alert-flag class).
+- Deleting/toggling while a filter is active must keep the view consistent
+  with the committed snapshot; focus management follows TOD-4's pattern
+  (surviving control, input fallback when the lookup misses).
 
 ## Named tests (must exist and pass)
 - store: filter helper returns correct subsets; persist round-trip.
