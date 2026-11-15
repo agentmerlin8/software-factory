@@ -15,6 +15,11 @@
 - src/App.test.tsx
 - src/index.css
 
+CSS scope (OC-17): the theme has NO completed-task rule yet, so AC2 requires
+one. Add ONLY the minimal completed-state rule (strikethrough + any contrast-
+safe muted color for completed titles). No restyling, no theme variants, no
+other selectors. Target ≤15 CSS lines; the visual budget is 120.
+
 ## Design slice
 - Toggle mutates `completed` via the store seam and persists.
 - Strikethrough is plain CSS on a completed class/attribute.
