@@ -85,6 +85,32 @@ def check_secrets(workdir: Path, base: str) -> tuple[bool, str]:
     return True, "no secret patterns"
 
 
+def check_contrast(workdir: Path, css_rel: str = "src/index.css",
+                   checks: list | None = None) -> tuple[bool, str]:
+    """Deterministic WCAG contrast gate (PRE-1).
+
+    Contrast is arithmetic, not judgment — an LLM reviewer passed 9 failing
+    pairs on TOD-1 as "cosmetic". This computes them instead.
+    """
+    from .a11y import ContrastCheck, audit
+
+    css_path = Path(workdir) / css_rel
+    if not css_path.exists():
+        return True, f"no {css_rel}; contrast gate skipped"
+    if checks is None:
+        checks = [
+            ContrastCheck("placeholder", "var(--ink-faint)", "var(--surface-raised)"),
+            ContrastCheck("add-hint", "var(--ink-faint)", "var(--paper)"),
+            ContrastCheck("task-count", "var(--ink-faint)", "var(--paper)"),
+            ContrastCheck("footer", "var(--ink-faint)", "var(--paper)"),
+            ContrastCheck("body", "var(--ink)", "var(--paper)"),
+        ]
+    findings = audit(css_path.read_text(encoding="utf-8"), checks)
+    if findings:
+        return False, "; ".join(str(f) for f in findings)
+    return True, f"{len(checks)} pairings x 2 themes pass WCAG AA"
+
+
 def pre_review(workdir: Path, *, base: str, manifest: list[str],
                test_filter: str | None = None,
                skip_build: bool = False) -> GateResult:
@@ -113,6 +139,12 @@ def pre_review(workdir: Path, *, base: str, manifest: list[str],
     checks["secrets"] = ok
     if not ok:
         failures.append(f"secrets: {detail}")
+
+    if any(m.endswith(".css") for m in manifest):
+        ok, detail = check_contrast(workdir)
+        checks["contrast"] = ok
+        if not ok:
+            failures.append(f"contrast: {detail}")
 
     return GateResult(passed=all(checks.values()), checks=checks,
                       failures=failures)

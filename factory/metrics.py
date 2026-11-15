@@ -53,6 +53,19 @@ def harvest(ledger: Ledger) -> dict[str, StoryMetrics]:
                 m.cost_usd += row["cost_usd"]
             if row.get("human_min") is not None:
                 m.human_min = (m.human_min or 0.0) + row["human_min"]
+        elif ev == "correction":
+            d = row.get("detail") or {}
+            tok = d.get("tokens") or {}
+            total = (tok.get("in") or 0) + (tok.get("out") or 0)
+            if total:
+                # corrections re-attribute a dispatch's usage (path-bug recovery)
+                role = row.get("role")
+                if role == "coder":
+                    m.coder_tokens += total
+                else:
+                    m.noncoder_tokens += total
+                if d.get("cost_usd"):
+                    m.cost_usd += d["cost_usd"]
         elif ev == "defect_found":
             m.defects += 1
         elif ev == "human_merged" and row.get("human_min") is not None:

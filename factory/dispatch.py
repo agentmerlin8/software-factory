@@ -19,6 +19,21 @@ RESUME_PREAMBLE = (
     "report — do not invent."
 )
 
+REVIEWER_LENSES = (
+    "Review by LENS, not by checklist. Do not limit yourself to any examples "
+    "given — hunt for what is NOT covered:\n"
+    "- Failure modes: every I/O, storage, network, parse, or quota path — what "
+    "happens when it throws, is full, is blocked, is slow, or returns junk?\n"
+    "- Accessibility: contrast, focus, labels, keyboard, screen-reader semantics. "
+    "COMPUTE what is computable; do not eyeball it.\n"
+    "- Hostile/edge input: empty, huge, unicode, duplicate, concurrent, replayed.\n"
+    "- Contract fidelity: every AC met, and nothing unrequested shipped.\n"
+    "- Test honesty: do the named tests assert the AC, or are they tautological?\n"
+    "You have the FULL post-change files and may RUN commands. Execute your "
+    "hypotheses before reporting them — a finding you did not verify is a guess. "
+    "State for each finding whether you EXECUTED it or REASONED it."
+)
+
 STOP_RULES = (
     "- Do NOT touch files outside the declared manifest.\n"
     "- Do NOT write to any state/control repo; you work ONLY in the product repo.\n"
@@ -72,6 +87,13 @@ def seal(*, story: str, role: str, model: str, instruction: str,
         lines.append(inputs[label].rstrip())
         lines.append("```")
         lines.append("")
+    lines.append("## Scope contract")
+    lines.append(
+        "Every change must trace to an acceptance criterion. Work not traceable "
+        "to an AC is either CUT or requires its own AC — the manifest is a "
+        "PERMISSION list, not a scope contract. Unrequested visual/theme work "
+        "is NOT 'cosmetic': it carries real accessibility and failure-path risk.")
+    lines.append("")
     lines.append("## Manifest (files you may touch)")
     for m in manifest:
         lines.append(f"- `{m}`")

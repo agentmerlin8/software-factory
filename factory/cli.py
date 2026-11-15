@@ -16,6 +16,7 @@ from . import __version__
 from .ledger import Ledger, LedgerError
 from . import gates, inbox, metrics
 from .dispatch import seal
+from .spec import check_story
 from .adapters import hermes
 
 
@@ -108,12 +109,23 @@ def cmd_dispatch(args) -> int:
         inputs["story"] = Path(args.story_file).read_text(encoding="utf-8")
     if args.design_file:
         inputs["design"] = Path(args.design_file).read_text(encoding="utf-8")
+    for extra in (args.input or []):
+        label, _, path = extra.partition("=")
+        inputs[label] = Path(path).read_text(encoding="utf-8")
+    if args.role == "coder" and args.story_file and not args.skip_spec_check:
+        spec = check_story(Path(args.story_file).read_text(encoding="utf-8"))
+        if not spec.passed:
+            print(f"REFUSED: story spec fails planning checks: {spec.named_failures()}",
+                  file=sys.stderr)
+            return 2
+        for w in spec.warnings:
+            print(f"warning: {w}", file=sys.stderr)
     pkg = seal(story=args.story, role=args.role, model=args.model,
                instruction=args.instruction, inputs=inputs,
                expected_outputs=args.outputs.split(","),
                repo=args.repo, sha=args.sha,
                manifest=args.manifest.split(","))
-    dispatch_dir = Path(args.dispatch_dir)
+    dispatch_dir = Path(args.dispatch_dir).resolve()
     seq = len(list(dispatch_dir.glob(f"{args.story}-{args.role}-*.md"))) + 1 \
         if dispatch_dir.exists() else 1
     path = pkg.write(dispatch_dir, seq)
@@ -130,11 +142,16 @@ def cmd_dispatch(args) -> int:
     res = hermes.run(path, model=args.model, workdir=Path(args.workdir),
                      usage_path=usage_path, toolsets=args.toolsets,
                      timeout_s=args.timeout)
+    # persist the dispatch transcript (reviewer verdicts live in stdout)
+    out_path = dispatch_dir / f"{args.story}-{args.role}-{seq:02d}.output.txt"
+    out_path.write_text(res.stdout + ("\n--- STDERR ---\n" + res.stderr if res.stderr else ""),
+                        encoding="utf-8")
     led.append("dispatch_completed", story=args.story, role=args.role,
                model=res.model or args.model, tokens=res.tokens,
                cost_usd=res.cost_usd, wall_s=res.wall_s,
                outcome="ok" if res.ok else "fail",
-               detail={"exit": res.exit_code, "usage": str(usage_path)})
+               detail={"exit": res.exit_code, "usage": str(usage_path),
+                       "output": str(out_path)})
     print(f"exit={res.exit_code} wall={res.wall_s:.1f}s "
           f"tokens={res.tokens} model={res.model}")
     if not res.ok:
@@ -174,12 +191,16 @@ def main(argv: list[str] | None = None) -> int:
     dp.add_argument("--story", required=True); dp.add_argument("--role", required=True)
     dp.add_argument("--model", required=True); dp.add_argument("--instruction", required=True)
     dp.add_argument("--story-file", default=None); dp.add_argument("--design-file", default=None)
+    dp.add_argument("--input", action="append", default=None,
+                    help="extra pinned input as label=path (repeatable)")
     dp.add_argument("--outputs", default="code committed,tests green")
     dp.add_argument("--repo", required=True); dp.add_argument("--sha", required=True)
     dp.add_argument("--manifest", required=True)
     dp.add_argument("--dispatch-dir", default="runs/todo-demo/dispatch")
     dp.add_argument("--workdir", required=True); dp.add_argument("--toolsets", default="terminal,file")
     dp.add_argument("--timeout", type=int, default=900); dp.add_argument("--dry-run", action="store_true")
+    dp.add_argument("--skip-spec-check", action="store_true",
+                    help="bypass planning checks (audited escape hatch)")
     dp.set_defaults(fn=cmd_dispatch)
 
     args = p.parse_args(argv)
