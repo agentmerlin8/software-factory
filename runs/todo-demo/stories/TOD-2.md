@@ -5,6 +5,8 @@
 2. Empty state shows a friendly message (not a blank page).
 3. A live count shows total tasks.
 4. The list survives reload (reads the same store TOD-1 writes).
+5. When stored data is corrupt or unreadable, the app renders the empty state
+   instead of crashing.
 
 ## Manifest (files you may touch)
 - src/store.ts
@@ -23,6 +25,7 @@
 - store: ordering helper returns newest-first; stable for equal timestamps.
 - component: renders tasks newest-first; empty-state message when none;
   count matches task total; reload restores the list.
+- failure: corrupt stored JSON -> empty state, no crash.
 
 ## Definition of done
 - `npm run build` green; `npx vitest run` green (full suite).

@@ -31,13 +31,24 @@ def test_good_story_passes():
 
 
 def test_real_tod1_spec_is_now_refused():
-    """The regression: TOD-1 as shipped had 4 happy-path ACs and no failure AC."""
-    p = REPO / "runs/todo-demo/stories/TOD-1.md"
-    if not p.exists():
-        pytest.skip("story file not present")
+    """Regression: TOD-1 AS SHIPPED had 4 happy-path ACs and no failure AC.
+
+    Pinned fixture = the original defective spec (the live file was fixed).
+    """
+    p = Path(__file__).parent / "fixtures" / "TOD-1-original-defective.md"
     r = check_story(p.read_text())
     assert not r.passed
     assert any("failure-mode AC" in f for f in r.failures), r.failures
+
+
+def test_all_live_stories_pass_spec_checks():
+    """Every queued story must satisfy the planning rules before dispatch."""
+    stories = sorted((REPO / "runs/todo-demo/stories").glob("TOD-*.md"))
+    if not stories:
+        pytest.skip("no stories present")
+    for p in stories:
+        r = check_story(p.read_text())
+        assert r.passed, f"{p.name}: {r.named_failures()}"
 
 
 def test_missing_ac_section():

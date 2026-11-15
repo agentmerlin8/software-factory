@@ -5,6 +5,8 @@
 2. Empty/whitespace-only input is rejected: no task created, input keeps focus.
 3. A new task appears in the list immediately after adding.
 4. The task persists across page reload (localStorage via the store seam).
+5. When storage fails (quota exceeded or blocked), the user sees an accessible
+   error, the draft is retained, and no partial task is added.
 
 ## Manifest (files you may touch)
 - src/store.ts
@@ -26,6 +28,7 @@
 - store: `addTask` appends and persists; empty title rejected at the UI layer.
 - component: typing + Add creates a visible task; Enter submits; whitespace
   rejected; reload restores the task (simulate via store round-trip).
+- failure: mock storage setItem to throw -> accessible alert, draft kept, no task.
 
 ## Definition of done
 - `npm run build` green; `npx vitest run` green (all tests, not just yours).

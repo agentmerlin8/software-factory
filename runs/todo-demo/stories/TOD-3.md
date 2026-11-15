@@ -5,6 +5,8 @@
 2. Completed tasks render visually distinct (strikethrough).
 3. Toggle state persists across reload.
 4. Toggling twice returns to the original state.
+5. When persisting the toggle fails, the UI does not silently show a state that
+   was not saved (revert or show an accessible error).
 
 ## Manifest (files you may touch)
 - src/store.ts
@@ -22,6 +24,7 @@
 - store: toggle flips completed and persists; double-toggle restores.
 - component: checkbox toggles; completed task has strikethrough styling;
   state survives reload.
+- failure: storage throws on toggle -> no silent unsaved state.
 
 ## Definition of done
 - `npm run build` green; `npx vitest run` green (full suite).

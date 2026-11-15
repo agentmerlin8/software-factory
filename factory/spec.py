@@ -25,7 +25,9 @@ FAILURE_AC = re.compile(
     r"quota|offline|timeout|timed out|corrupt\w*|denied|unwritable|"
     r"read-only|out of (?:space|memory)|error (?:message|state|feedback)|"
     r"storage (?:error|fail\w*)|network (?:error|fail\w*)|"
-    r"retry|graceful\w*|degrade\w*)\b", re.I)
+    r"retry|graceful\w*|degrade\w*|unreadable|unparseable|"
+    r"falls? back|fallback|instead of crashing|invalid (?:stored|data|value|"
+    r"json|state|input data))\b", re.I)
 
 MAX_ACS = 6  # slice law (DEC-023)
 
