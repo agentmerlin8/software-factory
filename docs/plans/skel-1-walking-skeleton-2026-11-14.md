@@ -180,7 +180,7 @@ merge (🧑 gate #2). Record `run_started`.
 For each TOD-N:
 1. **Plan** (controller assembles; coder model drafts impl-plan from the
    design doc slice) → `story_planned`.
-2. **Dispatch coder** (pin: qwen3.8-max; toolsets: terminal,file; workdir:
+2. **Dispatch coder** (pin: qwen4-max-preview — Randy's call 2026-11-14, 80% off; toolsets: terminal,file; workdir:
    product repo; branch `tod-N` from main). Package = story + design slice +
    manifest + TDD contract. → `dispatch_sealed/started/completed` + usage.
 3. **Gate** (deterministic: build, tests, manifest, secrets). Fail → inbox
@@ -220,7 +220,7 @@ populated; per-story metrics recorded.
 
 ### Task 3.1 — Single-session run
 
-One `hermes -z` dispatch (pin: qwen3.8-max, same as factory coder): package
+One `hermes -z` dispatch (pin: qwen4-max-preview, same as factory coder): package
 = the SAME design doc + all 5 stories + "implement all five, TDD, commit per
 story". One session, no plan review, no cross-family review, no gates beyond
 the repo's own CI. Human merges the result (🧑 gate, same as factory arm).
@@ -265,10 +265,11 @@ status file. Intake is a static doc here (guided intake = SKEL-2).
 
 ## Risks / open items
 
-- **Cost cap:** provider-side spend cap must be set BEFORE Phase 2 (Randy
-  confirms the ceiling; record it in the ledger `run_started`).
+- **Cost cap:** WAIVED for this run (Randy, 2026-11-14: "don't worry about
+  spending cap right now, this model is 80% off"). Recorded in `run_started`.
+  Re-introduce a ceiling before any paid-plan/cloud run.
 - **Human-min measurement:** PR-open→merge wall time is a proxy; Randy's
   actual review time is logged manually per story (one number, asked once).
-- **Reviewer family:** deepseek-v4-pro vs qwen coder = cross-family ✓. If
+- **Reviewer family:** deepseek-v4-pro vs qwen4-max-preview coder = cross-family ✓. If
   pool routing fails, fall back to glm-5.3 (still cross-family) and record
   the substitution.
