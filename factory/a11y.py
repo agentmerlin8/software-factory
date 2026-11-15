@@ -91,6 +91,53 @@ class ContrastCheck:
         return WCAG_AA_LARGE if self.large_text else WCAG_AA_NORMAL
 
 
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+
+
+def apply_brightness(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+    """CSS `filter: brightness(f)` — per-channel multiply, clamped to [0,255]."""
+    return tuple(min(255, max(0, round(c * factor))) for c in rgb)  # type: ignore[return-value]
+
+
+def mix_rgb(a: tuple[int, int, int], b: tuple[int, int, int],
+            t: float) -> tuple[int, int, int]:
+    """Linear interpolation between two gradient stops (t in [0,1])."""
+    return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))  # type: ignore[return-value]
+
+
+def ratio_rgb(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> float:
+    def _lum(c: tuple[int, int, int]) -> float:
+        return (0.2126 * _channel(c[0]) + 0.7152 * _channel(c[1])
+                + 0.0722 * _channel(c[2]))
+    a, b = _lum(fg), _lum(bg)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+@dataclass
+class GradientCheck:
+    """A label over a GRADIENT fill, audited across stops AND state filters.
+
+    Round-3 lesson: a flat-color contrast gate passes a button whose gradient
+    start (or hover-brightened fill) fails. Audit every stop under every
+    interactive-state brightness factor, in both themes.
+    """
+    label: str
+    fg: str
+    fill_from: str
+    fill_to: str
+    brightness_factors: tuple[float, ...] = (1.0, 1.07, 0.96)
+    stops: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
+    large_text: bool = False
+
+    @property
+    def threshold(self) -> float:
+        return WCAG_AA_LARGE if self.large_text else WCAG_AA_NORMAL
+
+
 @dataclass
 class ContrastFinding:
     theme: str
@@ -128,4 +175,39 @@ def audit(css: str, checks: list[ContrastCheck]) -> list[ContrastFinding]:
                 findings.append(ContrastFinding(
                     theme=theme, label=chk.label, fg=fg, bg=bg,
                     ratio=r, threshold=chk.threshold))
+    return findings
+
+def audit_gradients(css: str,
+                    checks: list[GradientCheck]) -> list[ContrastFinding]:
+    """Audit gradient-filled controls across stops, states, and themes."""
+    findings: list[ContrastFinding] = []
+    for dark in (False, True):
+        variables = theme_variables(css, dark=dark)
+        theme = "dark" if dark else "light"
+        for chk in checks:
+            fg_hex = resolve_color(chk.fg, variables)
+            a_hex = resolve_color(chk.fill_from, variables)
+            b_hex = resolve_color(chk.fill_to, variables)
+            if not (fg_hex and a_hex and b_hex):
+                findings.append(ContrastFinding(
+                    theme=theme, label=chk.label, fg=chk.fg,
+                    bg=f"{chk.fill_from}->{chk.fill_to}", ratio=0.0,
+                    threshold=chk.threshold))
+                continue
+            fg = _hex_to_rgb(fg_hex)
+            a, b = _hex_to_rgb(a_hex), _hex_to_rgb(b_hex)
+            worst = float("inf")
+            worst_ctx = ""
+            for factor in chk.brightness_factors:
+                for t in chk.stops:
+                    bg = apply_brightness(mix_rgb(a, b, t), factor)
+                    r = ratio_rgb(fg, bg)
+                    if r < worst:
+                        worst = r
+                        worst_ctx = f"stop {t:.0%} @brightness {factor}"
+            if worst < chk.threshold:
+                findings.append(ContrastFinding(
+                    theme=theme, label=f"{chk.label} ({worst_ctx})",
+                    fg=fg_hex, bg=f"{a_hex}->{b_hex}", ratio=worst,
+                    threshold=chk.threshold))
     return findings

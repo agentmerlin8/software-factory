@@ -92,7 +92,7 @@ def check_contrast(workdir: Path, css_rel: str = "src/index.css",
     Contrast is arithmetic, not judgment — an LLM reviewer passed 9 failing
     pairs on TOD-1 as "cosmetic". This computes them instead.
     """
-    from .a11y import ContrastCheck, audit
+    from .a11y import ContrastCheck, GradientCheck, audit, audit_gradients
 
     css_path = Path(workdir) / css_rel
     if not css_path.exists():
@@ -105,10 +105,21 @@ def check_contrast(workdir: Path, css_rel: str = "src/index.css",
             ContrastCheck("footer", "var(--ink-faint)", "var(--paper)"),
             ContrastCheck("body", "var(--ink)", "var(--paper)"),
         ]
-    findings = audit(css_path.read_text(encoding="utf-8"), checks)
+    css_text = css_path.read_text(encoding="utf-8")
+    findings = audit(css_text, checks)
+    # Round-3 blind spot: gradient-filled controls under hover/active filters.
+    grad_checks = [
+        GradientCheck("add-button", "var(--btn-label)",
+                      "var(--btn-fill-from)", "var(--btn-fill-to)"),
+    ]
+    # only audit gradients whose tokens actually exist in this stylesheet
+    grad_checks = [g for g in grad_checks
+                   if "--btn-fill-from" in css_text]
+    findings += audit_gradients(css_text, grad_checks)
     if findings:
         return False, "; ".join(str(f) for f in findings)
-    return True, f"{len(checks)} pairings x 2 themes pass WCAG AA"
+    return True, (f"{len(checks)} flat pairings + {len(grad_checks)} gradient "
+                  f"controls x 2 themes x states pass WCAG AA")
 
 
 def pre_review(workdir: Path, *, base: str, manifest: list[str],
@@ -139,6 +150,13 @@ def pre_review(workdir: Path, *, base: str, manifest: list[str],
     checks["secrets"] = ok
     if not ok:
         failures.append(f"secrets: {detail}")
+
+    # Round-3 class: untrusted parse boundaries must validate ELEMENTS.
+    from .boundaries import check_tree
+    bres = check_tree(Path(workdir))
+    checks["boundaries"] = bres.passed
+    if not bres.passed:
+        failures.append(f"boundaries: {bres.named_failures()}")
 
     if any(m.endswith(".css") for m in manifest):
         ok, detail = check_contrast(workdir)
