@@ -1,0 +1,37 @@
+{
+  "estimated_cost_usd": 0.0,
+  "cost_status": "unknown",
+  "cost_source": "none",
+  "input_tokens": 2563608,
+  "output_tokens": 61897,
+  "cache_read_tokens": 2484224,
+  "cache_write_tokens": 0,
+  "reasoning_tokens": 0,
+  "total_tokens": 2625505,
+  "api_calls": 60,
+  "model": "qwen4-max-preview",
+  "provider": "custom",
+  "session_id": "local-0771c2b2a987071c910135725e988663cd9cd3a1c86d88918b221e1cca59f252",
+  "completed": false,
+  "partial": false,
+  "interrupted": false,
+  "turn_exit_reason": "max_iterations_reached(60/60)",
+  "failed": false,
+  "service_tier": null,
+  "auxiliary": {
+    "api_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "reasoning_tokens": 0,
+    "estimated_cost_usd": 0,
+    "total_tokens": 0,
+    "by_task": {}
+  },
+  "total_including_auxiliary": {
+    "estimated_cost_usd": 0.0,
+    "total_tokens": 2625505,
+    "api_calls": 60
+  }
+}

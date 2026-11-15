@@ -1,0 +1,32 @@
+All five stories are implemented on main, committed, not pushed. Working tree clean.
+
+Final gate (real output): npm run build green (tsc -b + vite build, 87ms); npx vitest run green — 2 files, 77 tests passed; npm run lint (oxlint) clean.
+
+Commits (one per story, TDD red verified before each implementation):
+  f8acfbb TOD-1: Add a task            (red: 11 failures first)
+  ccfeb9c TOD-2: List tasks            (red: 10)
+  9d5c311 TOD-3: Complete / uncomplete (red: 12)
+  b5c0ffc TOD-4: Delete a task         (red: 11)
+  f7ac685 TOD-5: Filter view           (red: 15)
+
+What was built per story
+
+TOD-1 — addTask in the store seam (trim, validate, merge-by-id at the write boundary, returns the committed snapshot; throws on empty title or storage failure with nothing committed). loadTasks validates every stored entry and drops malformed ones. App: labeled input + Add, Enter submits, whitespace rejected with role=alert and focus kept, storage failure keeps the draft and adds nothing. Form/alert/list CSS with opaque focus ring.
+
+TOD-2 — sortNewestFirst: pure, stable newest-first ordering. Newest-first rendering, friendly empty state, live total count. Corrupt JSON and malformed elements ([null], [{}], wrong types) render the empty state. No CSS changes (index.css excluded from this manifest, OC-17).
+
+TOD-3 — toggleTask + readTasksStrict: mutations propagate storage access errors, re-read + merge by id so a concurrent tab's commit survives, return the committed snapshot (no post-write readback). Labeled checkbox per row; .completed class with strikethrough + contrast-safe muted color; failure leaves state untouched and raises the shared alert; distinct announcements per direction with counts. 18 CSS lines.
+
+TOD-4 — deleteTask: strict read, merge discipline, absent id is a no-op with no write, write failure leaves the store intact. Labeled Delete button; failure keeps the row visible + alert; success announces remaining count, clears stale flags. Focus moves to a surviving delete button (next, else previous), input fallback when the lookup misses or the last task goes. 15 CSS lines. Undo out of scope.
+
+TOD-5 — filterTasks pure helper; loadFilter wrapped in try/catch (the deferred TOD-2 N3 carry-forward; named test forces getItem to throw). All/Active/Completed aria-pressed button group; list and count reflect the filtered set; selection persists via the filter key only — task data untouched on switch; failure keeps the previous filter + alert; switches announce view + count; alert flags cleared on every success path; toggle/delete under a filter render from the committed snapshot with TOD-4 focus pattern; distinct "no matches" message vs the true empty state. 13 CSS lines.
+
+Test count: 77 total (store unit tests + component tests in jsdom), up from 7 in the scaffold. Every story's named tests exist and pass, including all failure-path tests (setItem/getItem throw mocks).
+
+Decisions made (also recorded in commit messages)
+- Committed on main per your instruction; the story texts say branch tod-N with human merge — the controller instruction overrides, nothing pushed.
+- Contrast computed, not eyeballed: 22 fg/bg pairs across both themes and normal/hover/active/pressed states, all >= 4.5:1 (script at /home/merlin/.hermes/cache/scratch/factory-exp/contrast-check.mjs). Solid button backdrops, no gradients.
+- Strikethrough CSS asserted by reading src/index.css with node:fs in the test — vitest css:false stubs ?raw imports to empty and jsdom's import.meta.url isn't a file URL. File-scoped /// <reference types="node" /> keeps tsconfig untouched.
+- TOD-2 ordering assertions scoped to .task-title once rows gained checkbox/delete labels (legitimate DOM change, not a behavior regression).
+- Add/delete announcements report the filtered-view count from TOD-5 on, so wording matches what's visible; clicking the already-active filter is a no-op.
+- Count text kept as "N tasks" (no singular/plural special-casing) to match the scaffold's existing testid contract.
