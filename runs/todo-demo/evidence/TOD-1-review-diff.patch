@@ -1,0 +1,852 @@
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+new file mode 100644
+index 0000000..2ec8c21
+--- /dev/null
++++ b/src/App.test.tsx
+@@ -0,0 +1,86 @@
++import { describe, it, expect, beforeEach } from "vitest";
++import { render, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import App from "./App";
++import { loadTasks } from "./store";
++
++beforeEach(() => {
++  localStorage.clear();
++});
++
++describe("TOD-1 — add a task", () => {
++  it("typing + Add creates a visible task", async () => {
++    const user = userEvent.setup();
++    render(<App />);
++    const input = screen.getByRole("textbox", { name: /new task/i });
++    await user.type(input, "Buy oat milk");
++    await user.click(screen.getByRole("button", { name: /^add$/i }));
++
++    expect(screen.getByRole("listitem")).toHaveTextContent("Buy oat milk");
++    expect(input).toHaveValue("");
++    expect(loadTasks().map((t) => t.title)).toEqual(["Buy oat milk"]);
++  });
++
++  it("Enter submits", async () => {
++    const user = userEvent.setup();
++    render(<App />);
++    const input = screen.getByRole("textbox", { name: /new task/i });
++    await user.type(input, "Ship the demo{Enter}");
++
++    expect(screen.getByRole("listitem")).toHaveTextContent("Ship the demo");
++    expect(loadTasks().map((t) => t.title)).toEqual(["Ship the demo"]);
++  });
++
++  it("whitespace-only input is rejected and the input keeps focus", async () => {
++    const user = userEvent.setup();
++    render(<App />);
++    const input = screen.getByRole("textbox", { name: /new task/i });
++    await user.type(input, "   ");
++    await user.click(screen.getByRole("button", { name: /^add$/i }));
++
++    expect(screen.queryByRole("listitem")).toBeNull();
++    expect(loadTasks()).toEqual([]);
++    expect(input).toHaveFocus();
++  });
++
++  it("empty input is rejected and the input keeps focus", async () => {
++    const user = userEvent.setup();
++    render(<App />);
++    const input = screen.getByRole("textbox", { name: /new task/i });
++    await user.click(screen.getByRole("button", { name: /^add$/i }));
++
++    expect(screen.queryByRole("listitem")).toBeNull();
++    expect(loadTasks()).toEqual([]);
++    expect(input).toHaveFocus();
++  });
++
++  it("new tasks appear immediately and accumulate in the list", async () => {
++    const user = userEvent.setup();
++    render(<App />);
++    const input = screen.getByRole("textbox", { name: /new task/i });
++    await user.type(input, "First{Enter}");
++    expect(screen.getAllByRole("listitem")).toHaveLength(1);
++    await user.type(input, "Second{Enter}");
++
++    const items = screen.getAllByRole("listitem");
++    expect(items).toHaveLength(2);
++    expect(items[0]).toHaveTextContent("First");
++    expect(items[1]).toHaveTextContent("Second");
++    expect(input).toHaveFocus();
++  });
++
++  it("reload restores the task (store round-trip)", async () => {
++    const user = userEvent.setup();
++    const { unmount } = render(<App />);
++    await user.type(
++      screen.getByRole("textbox", { name: /new task/i }),
++      "Persist me{Enter}",
++    );
++    expect(loadTasks().map((t) => t.title)).toEqual(["Persist me"]);
++
++    // Simulate a page reload: tear down the tree, mount fresh from the store.
++    unmount();
++    render(<App />);
++    expect(screen.getByRole("listitem")).toHaveTextContent("Persist me");
++  });
++});
+diff --git a/src/App.tsx b/src/App.tsx
+index ac149c5..8f5be5e 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,18 +1,96 @@
+-import { useState } from "react";
+-import { loadTasks, type Task } from "./store";
++import { useRef, useState } from "react";
++import type { FormEvent } from "react";
++import { addTask, loadTasks, type Task } from "./store";
+ 
+ /**
+- * SKEL-1 scaffold shell. Stories TOD-1…TOD-5 build the real UI on the
+- * store seam. This placeholder keeps the build green and the app
+- * deployable between stories (expand-first).
++ * TOD-1 — add a task. Form + list on the store seam (src/store.ts is the
++ * only module touching localStorage). Stories TOD-2…TOD-5 extend this
++ * shell; ordering, toggling, deleting and filtering land there.
+  */
+ export default function App() {
+-  const [tasks] = useState<Task[]>(() => loadTasks());
++  const [tasks, setTasks] = useState<Task[]>(() => loadTasks());
++  const [title, setTitle] = useState("");
++  const [rejected, setRejected] = useState(false);
++  const inputRef = useRef<HTMLInputElement>(null);
++
++  function handleSubmit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault();
++    const task = addTask(title);
++    if (!task) {
++      // AC2: empty/whitespace rejected — no task created, input keeps focus.
++      setRejected(true);
++      inputRef.current?.focus();
++      return;
++    }
++    setTasks((current) => [...current, task]);
++    setTitle("");
++    setRejected(false);
++    inputRef.current?.focus();
++  }
++
+   return (
+-    <main>
+-      <h1>To-Do</h1>
+-      <p data-testid="task-count">{tasks.length} tasks</p>
+-      <p>Factory demo scaffold — stories land here.</p>
++    <main className="app">
++      <header className="app-header">
++        <p className="eyebrow">local-first · no account</p>
++        <h1>To-Do</h1>
++        <p className="tagline">Small steps, written down.</p>
++      </header>
++
++      <form className="add-form" onSubmit={handleSubmit} noValidate>
++        <label className="visually-hidden" htmlFor="new-task">
++          New task
++        </label>
++        <div className={rejected ? "add-row add-row--rejected" : "add-row"}>
++          <input
++            id="new-task"
++            ref={inputRef}
++            className="add-input"
++            type="text"
++            value={title}
++            onChange={(event) => {
++              setTitle(event.target.value);
++              if (rejected) setRejected(false);
++            }}
++            placeholder="What needs doing?"
++            autoComplete="off"
++            autoFocus
++            aria-invalid={rejected}
++            aria-describedby="add-hint"
++          />
++          <button className="add-button" type="submit">
++            Add
++          </button>
++        </div>
++        <p
++          id="add-hint"
++          className={rejected ? "add-hint add-hint--error" : "add-hint"}
++          role={rejected ? "alert" : undefined}
++        >
++          {rejected
++            ? "Give the task a name — blank tasks don’t count."
++            : "Press Enter or hit Add. Everything stays in this browser."}
++        </p>
++      </form>
++
++      <section className="list-section" aria-label="Tasks">
++        <p data-testid="task-count" className="task-count">
++          {tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}
++        </p>
++        {tasks.length > 0 && (
++          <ul className="task-list">
++            {tasks.map((task) => (
++              <li key={task.id} className="task-item">
++                <span className="task-dot" aria-hidden="true" />
++                <span className="task-title">{task.title}</span>
++              </li>
++            ))}
++          </ul>
++        )}
++      </section>
++
++      <footer className="app-footer">
++        <p>Saved to this browser only — reload-safe, account-free.</p>
++      </footer>
+     </main>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/src/index.css b/src/index.css
+index 5fb3313..08d4045 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -1,111 +1,451 @@
++/* ── To-Do Demo · paper-ledger theme ─────────────────────────────────
++   Warm paper + ink, persimmon accent. Light and dark both committed;
++   every color derives from the ledger palette, nothing default-gray. */
++
+ :root {
+-  --text: #6b6375;
+-  --text-h: #08060d;
+-  --bg: #fff;
+-  --border: #e5e4e7;
+-  --code-bg: #f4f3ec;
+-  --accent: #aa3bff;
+-  --accent-bg: rgba(170, 59, 255, 0.1);
+-  --accent-border: rgba(170, 59, 255, 0.5);
+-  --social-bg: rgba(244, 243, 236, 0.5);
+-  --shadow:
+-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
++  --paper: #f7f1e5;
++  --paper-deep: #efe5d2;
++  --surface: #fffcf5;
++  --surface-raised: #fffefb;
++  --ink: #2b2118;
++  --ink-soft: #6f6353;
++  --ink-faint: #a2957f;
++  --rule: #e3d8c2;
++  --rule-strong: #cdbfa4;
+ 
+-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+-  --mono: ui-monospace, Consolas, monospace;
++  --persimmon: #d94f04;
++  --persimmon-deep: #b23e02;
++  --persimmon-wash: rgba(217, 79, 4, 0.09);
++  --marigold: #f2a007;
++  --leaf: #1a7f4e;
++  --sky: #1f5eff;
++  --danger: #c22f2f;
++  --danger-wash: rgba(194, 47, 47, 0.08);
+ 
+-  font: 18px/145% var(--sans);
+-  letter-spacing: 0.18px;
+-  color-scheme: light dark;
+-  color: var(--text);
+-  background: var(--bg);
+-  font-synthesis: none;
+-  text-rendering: optimizeLegibility;
++  --focus-ring: rgba(217, 79, 4, 0.35);
++  --shadow-card:
++    0 1px 2px rgba(43, 33, 24, 0.06), 0 12px 32px -12px rgba(43, 33, 24, 0.18);
++  --shadow-key:
++    0 1px 0 rgba(255, 255, 255, 0.35) inset, 0 2px 6px rgba(178, 62, 2, 0.35);
++
++  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
++  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
++
++  color-scheme: light;
++  font: 17px/1.5 var(--sans);
++  color: var(--ink);
++  background: var(--paper);
+   -webkit-font-smoothing: antialiased;
+   -moz-osx-font-smoothing: grayscale;
+-
+-  @media (max-width: 1024px) {
+-    font-size: 16px;
+-  }
++  text-rendering: optimizeLegibility;
+ }
+ 
+ @media (prefers-color-scheme: dark) {
+   :root {
+-    --text: #9ca3af;
+-    --text-h: #f3f4f6;
+-    --bg: #16171d;
+-    --border: #2e303a;
+-    --code-bg: #1f2028;
+-    --accent: #c084fc;
+-    --accent-bg: rgba(192, 132, 252, 0.15);
+-    --accent-border: rgba(192, 132, 252, 0.5);
+-    --social-bg: rgba(47, 48, 58, 0.5);
+-    --shadow:
+-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+-  }
++    --paper: #191410;
++    --paper-deep: #120e0b;
++    --surface: #221b15;
++    --surface-raised: #2a221b;
++    --ink: #f0e7d8;
++    --ink-soft: #b3a68f;
++    --ink-faint: #7d715c;
++    --rule: #3a3128;
++    --rule-strong: #4d4234;
+ 
+-  #social .button-icon {
+-    filter: invert(1) brightness(2);
++    --persimmon: #ff7a2f;
++    --persimmon-deep: #ff9254;
++    --persimmon-wash: rgba(255, 122, 47, 0.12);
++    --marigold: #ffb63d;
++    --leaf: #4cc38a;
++    --sky: #6f9aff;
++    --danger: #ff6b5e;
++    --danger-wash: rgba(255, 107, 94, 0.12);
++
++    --focus-ring: rgba(255, 122, 47, 0.4);
++    --shadow-card:
++      0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 36px -12px rgba(0, 0, 0, 0.6);
++    --shadow-key:
++      0 1px 0 rgba(255, 255, 255, 0.15) inset, 0 2px 8px rgba(0, 0, 0, 0.45);
++
++    color-scheme: dark;
+   }
+ }
+ 
+-#root {
+-  width: 1126px;
+-  max-width: 100%;
+-  margin: 0 auto;
+-  text-align: center;
+-  border-inline: 1px solid var(--border);
+-  min-height: 100svh;
+-  display: flex;
+-  flex-direction: column;
++* {
+   box-sizing: border-box;
+ }
+ 
+ body {
+   margin: 0;
++  min-height: 100svh;
++  background:
++    radial-gradient(
++      1100px 520px at 85% -10%,
++      var(--persimmon-wash),
++      transparent 60%
++    ),
++    radial-gradient(
++      900px 480px at -10% 110%,
++      rgba(242, 160, 7, 0.08),
++      transparent 55%
++    ),
++    linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
++  background-attachment: fixed;
+ }
+ 
+-h1,
+-h2 {
+-  font-family: var(--heading);
+-  font-weight: 500;
+-  color: var(--text-h);
++/* Grain layer — barely-there paper tooth over the gradients. */
++body::before {
++  content: "";
++  position: fixed;
++  inset: 0;
++  pointer-events: none;
++  z-index: 0;
++  opacity: 0.5;
++  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
++}
++
++#root {
++  position: relative;
++  z-index: 1;
++  min-height: 100svh;
++  display: flex;
++  flex-direction: column;
++}
++
++/* Scrollbar in the ledger's own voice */
++* {
++  scrollbar-width: thin;
++  scrollbar-color: var(--rule-strong) transparent;
++}
++*::-webkit-scrollbar {
++  width: 10px;
++  height: 10px;
++}
++*::-webkit-scrollbar-track {
++  background: transparent;
++}
++*::-webkit-scrollbar-thumb {
++  background: var(--rule-strong);
++  border-radius: 8px;
++  border: 2px solid var(--paper);
++}
++*::-webkit-scrollbar-thumb:hover {
++  background: var(--persimmon);
++}
++
++::selection {
++  background: var(--persimmon);
++  color: var(--surface);
++}
++
++/* ── Shell ─────────────────────────────────────────────────────── */
++
++.app {
++  width: min(640px, 100% - 2.5rem);
++  margin: 0 auto;
++  padding: clamp(2rem, 6vh, 4rem) 0 2rem;
++  flex: 1;
++  display: flex;
++  flex-direction: column;
++}
++
++.app-header {
++  animation: rise-in 0.5s ease-out both;
++}
++
++.eyebrow {
++  margin: 0 0 0.5rem;
++  font-size: 0.72rem;
++  font-weight: 600;
++  letter-spacing: 0.18em;
++  text-transform: uppercase;
++  color: var(--persimmon);
+ }
+ 
+ h1 {
+-  font-size: 56px;
+-  letter-spacing: -1.68px;
+-  margin: 32px 0;
+-  @media (max-width: 1024px) {
+-    font-size: 36px;
+-    margin: 20px 0;
+-  }
+-}
+-h2 {
+-  font-size: 24px;
+-  line-height: 118%;
+-  letter-spacing: -0.24px;
+-  margin: 0 0 8px;
+-  @media (max-width: 1024px) {
+-    font-size: 20px;
+-  }
+-}
+-p {
+   margin: 0;
++  font-family: var(--serif);
++  font-size: clamp(2.6rem, 8vw, 3.4rem);
++  font-weight: 600;
++  letter-spacing: -0.02em;
++  line-height: 1.05;
++  color: var(--ink);
+ }
+ 
+-code,
+-.counter {
+-  font-family: var(--mono);
+-  display: inline-flex;
+-  border-radius: 4px;
+-  color: var(--text-h);
++h1::after {
++  content: "";
++  display: block;
++  width: 3.2rem;
++  height: 4px;
++  margin-top: 0.7rem;
++  border-radius: 2px;
++  background: linear-gradient(90deg, var(--persimmon), var(--marigold));
+ }
+ 
+-code {
+-  font-size: 15px;
+-  line-height: 135%;
+-  padding: 4px 8px;
+-  background: var(--code-bg);
++.tagline {
++  margin: 0.8rem 0 0;
++  font-family: var(--serif);
++  font-style: italic;
++  font-size: 1.05rem;
++  color: var(--ink-soft);
++}
++
++/* ── Add form ──────────────────────────────────────────────────── */
++
++.add-form {
++  margin-top: 2rem;
++  animation: rise-in 0.5s 0.08s ease-out both;
++}
++
++.add-row {
++  display: flex;
++  gap: 0.6rem;
++  padding: 0.5rem;
++  background: var(--surface);
++  border: 1px solid var(--rule);
++  border-radius: 14px;
++  box-shadow: var(--shadow-card);
++  transition:
++    border-color 0.15s ease,
++    box-shadow 0.15s ease;
++}
++
++.add-row:focus-within {
++  border-color: var(--persimmon);
++  box-shadow:
++    var(--shadow-card),
++    0 0 0 4px var(--focus-ring);
++}
++
++.add-row--rejected {
++  border-color: var(--danger);
++  animation: shake 0.3s ease-in-out;
++}
++
++.add-row--rejected:focus-within {
++  border-color: var(--danger);
++  box-shadow:
++    var(--shadow-card),
++    0 0 0 4px var(--danger-wash);
++}
++
++.add-input {
++  flex: 1;
++  min-width: 0;
++  padding: 0.65rem 0.8rem;
++  font: inherit;
++  color: var(--ink);
++  background: transparent;
++  border: 0;
++  outline: none;
++}
++
++.add-input::placeholder {
++  color: var(--ink-faint);
++}
++
++.add-button {
++  flex-shrink: 0;
++  padding: 0.65rem 1.4rem;
++  font: inherit;
++  font-weight: 650;
++  color: #fff8f0;
++  background: linear-gradient(
++    160deg,
++    var(--persimmon) 0%,
++    var(--persimmon-deep) 100%
++  );
++  border: 0;
++  border-radius: 10px;
++  box-shadow: var(--shadow-key);
++  cursor: pointer;
++  transition:
++    transform 0.12s ease,
++    filter 0.12s ease;
++}
++
++@media (prefers-color-scheme: dark) {
++  .add-button {
++    color: #241205;
++  }
++}
++
++.add-button:hover {
++  filter: brightness(1.07);
++  transform: translateY(-1px);
++}
++
++.add-button:active {
++  transform: translateY(1px) scale(0.98);
++  filter: brightness(0.96);
++}
++
++.add-button:focus-visible {
++  outline: 3px solid var(--focus-ring);
++  outline-offset: 2px;
++}
++
++.add-hint {
++  margin: 0.6rem 0.2rem 0;
++  min-height: 1.4em;
++  font-size: 0.83rem;
++  color: var(--ink-faint);
++}
++
++.add-hint--error {
++  color: var(--danger);
++  font-weight: 600;
++}
++
++/* ── Task list ─────────────────────────────────────────────────── */
++
++.list-section {
++  margin-top: 1.6rem;
++  animation: rise-in 0.5s 0.16s ease-out both;
++}
++
++.task-count {
++  margin: 0 0 0.7rem;
++  font-size: 0.78rem;
++  font-weight: 600;
++  letter-spacing: 0.14em;
++  text-transform: uppercase;
++  color: var(--ink-faint);
++}
++
++.task-list {
++  list-style: none;
++  margin: 0;
++  padding: 0;
++  display: flex;
++  flex-direction: column;
++  gap: 0.55rem;
++}
++
++.task-item {
++  display: flex;
++  align-items: baseline;
++  gap: 0.8rem;
++  padding: 0.85rem 1.1rem;
++  background: var(--surface-raised);
++  border: 1px solid var(--rule);
++  border-radius: 12px;
++  box-shadow: 0 1px 2px rgba(43, 33, 24, 0.05);
++  animation: task-in 0.28s ease-out both;
++  transition:
++    border-color 0.15s ease,
++    transform 0.15s ease;
++}
++
++.task-item:hover {
++  border-color: var(--rule-strong);
++  transform: translateX(3px);
++}
++
++.task-dot {
++  flex-shrink: 0;
++  width: 0.55rem;
++  height: 0.55rem;
++  border-radius: 50%;
++  align-self: center;
++  background: linear-gradient(135deg, var(--persimmon), var(--marigold));
++  box-shadow: 0 0 0 3px var(--persimmon-wash);
++}
++
++.task-title {
++  overflow-wrap: anywhere;
++  color: var(--ink);
++}
++
++/* ── Footer ────────────────────────────────────────────────────── */
++
++.app-footer {
++  margin-top: auto;
++  padding-top: 2.5rem;
++  animation: rise-in 0.5s 0.24s ease-out both;
++}
++
++.app-footer p {
++  margin: 0;
++  padding-top: 1rem;
++  border-top: 1px dashed var(--rule-strong);
++  font-size: 0.8rem;
++  color: var(--ink-faint);
++}
++
++/* ── Utilities & motion ────────────────────────────────────────── */
++
++.visually-hidden {
++  position: absolute;
++  width: 1px;
++  height: 1px;
++  margin: -1px;
++  padding: 0;
++  overflow: hidden;
++  clip: rect(0 0 0 0);
++  clip-path: inset(50%);
++  white-space: nowrap;
++  border: 0;
++}
++
++@keyframes rise-in {
++  from {
++    opacity: 0;
++    transform: translateY(14px);
++  }
++  to {
++    opacity: 1;
++    transform: translateY(0);
++  }
++}
++
++@keyframes task-in {
++  from {
++    opacity: 0;
++    transform: translateY(-8px) scale(0.98);
++  }
++  to {
++    opacity: 1;
++    transform: translateY(0) scale(1);
++  }
++}
++
++@keyframes shake {
++  0%,
++  100% {
++    transform: translateX(0);
++  }
++  25% {
++    transform: translateX(-5px);
++  }
++  50% {
++    transform: translateX(4px);
++  }
++  75% {
++    transform: translateX(-2px);
++  }
++}
++
++@media (prefers-reduced-motion: reduce) {
++  *,
++  *::before,
++  *::after {
++    animation-duration: 0.01ms !important;
++    animation-iteration-count: 1 !important;
++    transition-duration: 0.01ms !important;
++  }
++}
++
++@media (max-width: 480px) {
++  :root {
++    font-size: 16px;
++  }
++
++  .app {
++    width: min(640px, 100% - 1.6rem);
++  }
++
++  .add-button {
++    padding-inline: 1.05rem;
++  }
+ }
+diff --git a/src/store.test.ts b/src/store.test.ts
+index 68ae763..ea3bad9 100644
+--- a/src/store.test.ts
++++ b/src/store.test.ts
+@@ -1,5 +1,13 @@
+ import { describe, it, expect, beforeEach } from "vitest";
+-import { loadTasks, saveTasks, loadFilter, saveFilter, newId } from "./store";
++import {
++  addTask,
++  loadTasks,
++  saveTasks,
++  loadFilter,
++  saveFilter,
++  newId,
++  subscribe,
++} from "./store";
+ 
+ beforeEach(() => {
+   localStorage.clear();
+@@ -41,4 +49,59 @@ describe("store persistence seam", () => {
+     const ids = new Set(Array.from({ length: 50 }, () => newId()));
+     expect(ids.size).toBe(50);
+   });
++});
++
++describe("addTask (TOD-1)", () => {
++  it("appends a task and persists it", () => {
++    const first = addTask("Water the plants");
++    const second = addTask("Read one chapter");
++
++    const tasks = loadTasks();
++    expect(tasks).toHaveLength(2);
++    expect(tasks[0]).toEqual(first);
++    expect(tasks[1]).toEqual(second);
++    expect(tasks.map((t) => t.title)).toEqual([
++      "Water the plants",
++      "Read one chapter",
++    ]);
++  });
++
++  it("creates well-formed tasks: unique id, trimmed title, not completed, timestamp", () => {
++    const before = Date.now();
++    const a = addTask("  Stretch for five minutes  ");
++    const b = addTask("Journal");
++    const after = Date.now();
++    if (!a || !b) throw new Error("addTask rejected a valid title");
++
++    expect(a.title).toBe("Stretch for five minutes");
++    expect(a.completed).toBe(false);
++    expect(typeof a.id).toBe("string");
++    expect(a.id.length).toBeGreaterThan(0);
++    expect(a.id).not.toBe(b.id);
++    expect(a.createdAt).toBeGreaterThanOrEqual(before);
++    expect(a.createdAt).toBeLessThanOrEqual(after);
++  });
++
++  it("rejects empty and whitespace-only titles: returns null, stores nothing", () => {
++    expect(addTask("")).toBeNull();
++    expect(addTask("   ")).toBeNull();
++    expect(addTask("\t\n ")).toBeNull();
++    expect(loadTasks()).toEqual([]);
++  });
++
++  it("notifies subscribers when a task is added, not when rejected", () => {
++    let calls = 0;
++    const unsubscribe = subscribe(() => {
++      calls += 1;
++    });
++
++    addTask("Ping");
++    expect(calls).toBe(1);
++    addTask("   ");
++    expect(calls).toBe(1);
++
++    unsubscribe();
++    addTask("After unsubscribe");
++    expect(calls).toBe(1);
++  });
+ });
+\ No newline at end of file
+diff --git a/src/store.ts b/src/store.ts
+index 7b8b39c..c24bab3 100644
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -58,4 +58,23 @@ export function saveFilter(filter: Filter): void {
+ 
+ export function newId(): string {
+   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
++}
++
++/**
++ * TOD-1 — add a task. Trims the title; empty/whitespace-only titles are
++ * rejected (returns null, store untouched, no notification). Persistence
++ * and notification go through the same seam every later story extends.
++ * Returns the created task so callers can update their view immediately.
++ */
++export function addTask(title: string): Task | null {
++  const trimmed = title.trim();
++  if (!trimmed) return null;
++  const task: Task = {
++    id: newId(),
++    title: trimmed,
++    completed: false,
++    createdAt: Date.now(),
++  };
++  saveTasks([...loadTasks(), task]);
++  return task;
+ }
+\ No newline at end of file

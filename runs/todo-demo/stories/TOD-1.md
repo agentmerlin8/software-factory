@@ -7,6 +7,12 @@
 4. The task persists across page reload (localStorage via the store seam).
 5. When storage fails (quota exceeded or blocked), the user sees an accessible
    error, the draft is retained, and no partial task is added.
+6. Malformed stored entries (`[null]`, partial objects, wrong field types) are
+   dropped at the storage boundary and never crash the render.
+
+## Visual acceptance (any styled control)
+- Text on every control meets WCAG AA 4.5:1 in BOTH themes and in ALL states
+  (normal, hover, active) across every gradient stop. Compute it; do not eyeball.
 
 ## Manifest (files you may touch)
 - src/store.ts

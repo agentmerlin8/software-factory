@@ -6,7 +6,9 @@
 3. A live count shows total tasks.
 4. The list survives reload (reads the same store TOD-1 writes).
 5. When stored data is corrupt or unreadable, the app renders the empty state
-   instead of crashing.
+   instead of crashing. This includes MALFORMED ARRAY ELEMENTS (e.g. `[null]`,
+   `[{}]`, wrong field types), not just unparseable JSON — validate every entry
+   at the storage boundary.
 
 ## Manifest (files you may touch)
 - src/store.ts
