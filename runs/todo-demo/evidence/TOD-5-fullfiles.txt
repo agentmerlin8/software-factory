@@ -1,0 +1,3085 @@
+--- src/store.ts @ 48ee26407 ---
+/**
+ * store.ts — the ONLY module that touches localStorage (design §3).
+ *
+ * SKEL-1 scaffold: types + persistence helpers + subscription seam.
+ * Story TOD-1 adds the first real operations; each story extends this
+ * module. No story reads/writes localStorage directly.
+ */
+
+export interface Task {
+  id: string;
+  title: string;
+  completed: boolean;
+  createdAt: number;
+}
+
+export type Filter = "all" | "active" | "completed";
+
+const STORAGE_KEY = "todo-demo:tasks";
+const FILTER_KEY = "todo-demo:filter";
+
+type Listener = () => void;
+const listeners = new Set<Listener>();
+
+export function subscribe(fn: Listener): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function emit(): void {
+  for (const fn of listeners) fn();
+}
+
+/**
+ * Runtime guard for one stored entry. Storage is an UNTRUSTED boundary: the
+ * JSON may be written by an older version, another tab, or a user with
+ * devtools. `Array.isArray` alone lets `[null]` or `[{}]` reach the render
+ * and throw during mount, so every field is validated here, once.
+ */
+export function isTask(value: unknown): value is Task {
+  if (typeof value !== "object" || value === null) return false;
+  const t = value as Record<string, unknown>;
+  return (
+    typeof t.id === "string" &&
+    t.id.length > 0 &&
+    typeof t.title === "string" &&
+    typeof t.completed === "boolean" &&
+    typeof t.createdAt === "number" &&
+    Number.isFinite(t.createdAt)
+  );
+}
+
+/**
+ * Strict read for MUTATION paths: storage-access errors propagate so the
+ * caller can surface them (round-2 finding: a read failure during toggle
+ * was swallowed into "unknown id" and the UI stayed silent). Corrupt JSON
+ * and malformed entries are still tolerated — that is data validation,
+ * not an access failure.
+ */
+function readTasksStrict(): Task[] {
+  const raw = localStorage.getItem(STORAGE_KEY); // throws on access failure
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const seen = new Set<string>();
+  const tasks: Task[] = [];
+  for (const entry of parsed) {
+    if (!isTask(entry) || seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    tasks.push(entry);
+  }
+  return tasks;
+}
+
+export function loadTasks(): Task[] {
+  try {
+    return readTasksStrict();
+  } catch {
+    // Tolerant load for initial rendering: an unreadable store renders the
+    // empty state instead of crashing the mount (TOD-2 AC5).
+    return [];
+  }
+}
+
+export function saveTasks(tasks: Task[]): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  emit();
+}
+
+/**
+ * TOD-2 — newest-first ordering. Pure: returns a new array, never mutates
+ * the input (loadTasks hands out fresh arrays, but callers may hold their
+ * own). Array.prototype.sort is stable (ES2019+), so tasks sharing a
+ * createdAt keep their stored order — no secondary tiebreaker needed.
+ */
+export function sortNewestFirst(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
+ * Append records with the read and the write in ONE synchronous step.
+ *
+ * A caller that reads, does work, then writes always has a window where
+ * another tab can commit; merging BEFORE the write does not close it (the
+ * window is between the merge-read and setItem). Here the current state is
+ * read immediately before setItem with nothing in between, so a concurrent
+ * commit is either already visible (and preserved) or lands after ours.
+ *
+ * localStorage has no compare-and-swap, so this narrows the window to the
+ * minimum the platform allows rather than eliminating it. Cross-tab
+ * atomicity would need the Web Locks API; that is a deliberate follow-up,
+ * not something this function claims to provide.
+ */
+export function appendTasks(incoming: Task[]): Task[] {
+  const current = loadTasks();
+  const byId = new Map(current.map((t) => [t.id, t]));
+  for (const t of incoming) {
+    if (!byId.has(t.id)) byId.set(t.id, t);
+  }
+  const merged = [...byId.values()];
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+  emit();
+  return merged;
+}
+
+export function loadFilter(): Filter {
+  // N3 carry-forward (TOD-2 review): a throwing getItem must not crash the
+  // mount. Tolerant load mirrors loadTasks — an unreadable filter falls back
+  // to "all" (TOD-5 AC5) instead of propagating.
+  try {
+    const raw = localStorage.getItem(FILTER_KEY);
+    return raw === "active" || raw === "completed" ? raw : "all";
+  } catch {
+    return "all";
+  }
+}
+
+export function saveFilter(filter: Filter): void {
+  localStorage.setItem(FILTER_KEY, filter);
+  emit();
+}
+
+/**
+ * TOD-5 — pure view filter over tasks + selection. Returns a NEW array and
+ * never mutates the input or the store (AC4: switching filters writes no
+ * task data). "all" is the identity subset; active/completed partition by
+ * the completed flag.
+ */
+export function filterTasks(tasks: Task[], filter: Filter): Task[] {
+  if (filter === "active") return tasks.filter((t) => !t.completed);
+  if (filter === "completed") return tasks.filter((t) => t.completed);
+  return [...tasks];
+}
+
+export function newId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * TOD-1 — add a task. Trims the title; empty/whitespace-only titles are
+ * rejected (returns null, store untouched, no notification). Persistence
+ * and notification go through the same seam every later story extends.
+ * Returns the created task so callers can update their view immediately.
+ */
+/**
+ * Append a task without clobbering a concurrent writer.
+ *
+ * localStorage has no compare-and-swap, so a plain read-modify-write loses
+ * updates when two tabs interleave (both read the same list, both write, the
+ * second erases the first). We cannot make the pair atomic, but we can make
+ * the WRITE a merge: re-read immediately before persisting and union by id.
+ * That narrows the window to a single synchronous read+write and, crucially,
+ * never drops a record another tab already committed.
+ */
+export function addTask(title: string): Task | null {
+  const trimmed = title.trim();
+  if (!trimmed) return null;
+  const task: Task = {
+    id: newId(),
+    title: trimmed,
+    completed: false,
+    createdAt: Date.now(),
+  };
+  // Single synchronous read+merge+write; see appendTasks for the guarantee
+  // and its limit.
+  appendTasks([task]);
+  return task;
+}
+
+/**
+ * TOD-3 — flip one task's `completed` flag. Same merge discipline as
+ * appendTasks: re-read immediately before the write and union by id, so a
+ * task another tab committed is never dropped. Our toggle is applied to
+ * the FRESH copy (last-writer-wins for the flag itself — localStorage has
+ * no compare-and-swap; the window is narrowed, not eliminated). Returns
+ * the updated task, or null when the id is unknown (no write, no
+ * notification). A storage failure propagates BEFORE emit and before any
+ * caller can render the new state — nothing unsaved is ever announced
+ * (TOD-3 AC5).
+ */
+export interface ToggleResult {
+  task: Task;
+  /** The exact list committed by this write. Callers render from THIS
+   * snapshot — a post-write readback is a fresh fallible I/O that can fail
+   * after a successful save and wipe the visible list (round-3 finding). */
+  tasks: Task[];
+}
+
+export function toggleTask(id: string): ToggleResult | null {
+  const current = readTasksStrict();
+  if (!current.some((t) => t.id === id)) return null;
+  // Re-read + merge immediately before setItem (see appendTasks). A plain
+  // array overwrite here would drop a concurrent tab's committed task —
+  // mutation-proven in the round-1 review probe.
+  const fresh = readTasksStrict();
+  const byId = new Map(fresh.map((t) => [t.id, t]));
+  const base = byId.get(id);
+  if (!base) return null; // removed by another tab between reads
+  const toggled: Task = { ...base, completed: !base.completed };
+  byId.set(id, toggled);
+  const committed = [...byId.values()];
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(committed));
+  emit();
+  return { task: toggled, tasks: committed };
+}
+
+/**
+ * TOD-4 — remove one task by id. Same write-boundary discipline as
+ * toggleTask: strict read for the existence check (access errors
+ * propagate), re-read immediately before setItem so a concurrent tab's
+ * committed task survives, and the COMMITTED snapshot is returned for
+ * rendering — no post-write readback. Returns null when the id is unknown
+ * (no write, no notification). A storage failure propagates BEFORE emit,
+ * so the task is never gone from the UI while still in the store, or vice
+ * versa (AC5).
+ */
+export interface DeleteResult {
+  task: Task;
+  /** The exact list committed by this write; callers render from THIS. */
+  tasks: Task[];
+}
+
+export function deleteTask(id: string): DeleteResult | null {
+  const current = readTasksStrict();
+  if (!current.some((t) => t.id === id)) return null;
+  const fresh = readTasksStrict();
+  const removed = fresh.find((t) => t.id === id);
+  if (!removed) return null; // removed by another tab between reads
+  const committed = fresh.filter((t) => t.id !== id);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(committed));
+  emit();
+  return { task: removed, tasks: committed };
+}
+
+--- src/store.test.ts @ 48ee26407 ---
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  addTask,
+  appendTasks,
+  isTask,
+  loadTasks,
+  saveTasks,
+  loadFilter,
+  saveFilter,
+  newId,
+  deleteTask,
+  filterTasks,
+  sortNewestFirst,
+  subscribe,
+  toggleTask,
+  type Task,
+} from "./store";
+
+beforeEach(() => {
+  localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("store persistence seam", () => {
+  it("round-trips tasks through localStorage", () => {
+    const tasks = [
+      { id: "a", title: "one", completed: false, createdAt: 1 },
+    ];
+    saveTasks(tasks);
+    expect(loadTasks()).toEqual(tasks);
+  });
+
+  it("returns empty list when nothing stored", () => {
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("returns empty list on corrupt storage", () => {
+    localStorage.setItem("todo-demo:tasks", "{not json");
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("defaults filter to all", () => {
+    expect(loadFilter()).toBe("all");
+  });
+
+  it("round-trips filter", () => {
+    saveFilter("completed");
+    expect(loadFilter()).toBe("completed");
+  });
+
+  it("rejects invalid filter values", () => {
+    localStorage.setItem("todo-demo:filter", "bogus");
+    expect(loadFilter()).toBe("all");
+  });
+
+  it("newId produces unique ids", () => {
+    const ids = new Set(Array.from({ length: 50 }, () => newId()));
+    expect(ids.size).toBe(50);
+  });
+});
+
+describe("addTask (TOD-1)", () => {
+  it("appends a task and persists it", () => {
+    const first = addTask("Water the plants");
+    const second = addTask("Read one chapter");
+
+    const tasks = loadTasks();
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]).toEqual(first);
+    expect(tasks[1]).toEqual(second);
+    expect(tasks.map((t) => t.title)).toEqual([
+      "Water the plants",
+      "Read one chapter",
+    ]);
+  });
+
+  it("creates well-formed tasks: unique id, trimmed title, not completed, timestamp", () => {
+    const before = Date.now();
+    const a = addTask("  Stretch for five minutes  ");
+    const b = addTask("Journal");
+    const after = Date.now();
+    if (!a || !b) throw new Error("addTask rejected a valid title");
+
+    expect(a.title).toBe("Stretch for five minutes");
+    expect(a.completed).toBe(false);
+    expect(typeof a.id).toBe("string");
+    expect(a.id.length).toBeGreaterThan(0);
+    expect(a.id).not.toBe(b.id);
+    expect(a.createdAt).toBeGreaterThanOrEqual(before);
+    expect(a.createdAt).toBeLessThanOrEqual(after);
+  });
+
+  it("rejects empty and whitespace-only titles: returns null, stores nothing", () => {
+    expect(addTask("")).toBeNull();
+    expect(addTask("   ")).toBeNull();
+    expect(addTask("\t\n ")).toBeNull();
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("notifies subscribers when a task is added, not when rejected", () => {
+    let calls = 0;
+    const unsubscribe = subscribe(() => {
+      calls += 1;
+    });
+
+    addTask("Ping");
+    expect(calls).toBe(1);
+    addTask("   ");
+    expect(calls).toBe(1);
+
+    unsubscribe();
+    addTask("After unsubscribe");
+    expect(calls).toBe(1);
+  });
+});
+describe("storage boundary validates entries (round-3 regression)", () => {
+  it("drops null entries instead of crashing the render", () => {
+    localStorage.setItem("todo-demo:tasks", "[null]");
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("drops entries missing required fields", () => {
+    localStorage.setItem(
+      "todo-demo:tasks",
+      JSON.stringify([{ id: "x" }, { title: "no id" }, 42, "str", []]),
+    );
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("drops entries with wrong field types", () => {
+    localStorage.setItem(
+      "todo-demo:tasks",
+      JSON.stringify([
+        { id: 1, title: "a", completed: false, createdAt: 1 },
+        { id: "b", title: null, completed: false, createdAt: 1 },
+        { id: "c", title: "c", completed: "no", createdAt: 1 },
+        { id: "d", title: "d", completed: false, createdAt: "1" },
+      ]),
+    );
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("keeps valid entries and drops only the malformed ones", () => {
+    const good = { id: "ok", title: "keep", completed: false, createdAt: 5 };
+    localStorage.setItem(
+      "todo-demo:tasks",
+      JSON.stringify([null, good, { id: "bad" }]),
+    );
+    expect(loadTasks()).toEqual([good]);
+  });
+
+  it("dedupes by id so corrupt stores cannot produce duplicate keys", () => {
+    const a = { id: "dup", title: "first", completed: false, createdAt: 1 };
+    const b = { id: "dup", title: "second", completed: true, createdAt: 2 };
+    localStorage.setItem("todo-demo:tasks", JSON.stringify([a, b]));
+    expect(loadTasks()).toEqual([a]);
+  });
+
+  it("rejects a non-number createdAt (type guard)", () => {
+    localStorage.setItem(
+      "todo-demo:tasks",
+      '[{"id":"x","title":"t","completed":false,"createdAt":null}]',
+    );
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("rejects non-finite NUMBERS (exercises Number.isFinite, not typeof)", () => {
+    // null/undefined/"1" are caught by `typeof === "number"` and never reach
+    // Number.isFinite. Only a value that IS a number but is not finite
+    // exercises that guard: Infinity, -Infinity, NaN. JSON cannot carry
+    // NaN/Infinity literals, so build the payload with a replacer-free splice.
+    for (const bad of ["Infinity", "-Infinity", "NaN"]) {
+      localStorage.setItem(
+        "todo-demo:tasks",
+        `[{"id":"x","title":"t","completed":false,"createdAt":${bad}}]`,
+      );
+      // Bare NaN/Infinity are invalid JSON -> the parse guard rejects them.
+      expect(loadTasks()).toEqual([]);
+    }
+  });
+
+  it("rejects an empty id (exercises the id.length guard)", () => {
+    // Found by a mutation sweep, not by review: deleting `t.id.length > 0`
+    // left the whole suite green. An empty id would also collide as a React
+    // key, so the guard is load-bearing and needs its own assertion.
+    const base = { title: "t", completed: false, createdAt: 1 };
+    expect(isTask({ ...base, id: "" })).toBe(false);
+    expect(isTask({ ...base, id: "ok" })).toBe(true);
+    localStorage.setItem(
+      "todo-demo:tasks",
+      '[{"id":"","title":"t","completed":false,"createdAt":1}]',
+    );
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("rejects real non-finite numbers reaching isTask directly", () => {
+    // The honest probe: call the guard with actual JS non-finite numbers,
+    // which is the only way to reach Number.isFinite at all.
+    const base = { id: "x", title: "t", completed: false };
+    expect(isTask({ ...base, createdAt: Number.POSITIVE_INFINITY })).toBe(false);
+    expect(isTask({ ...base, createdAt: Number.NEGATIVE_INFINITY })).toBe(false);
+    expect(isTask({ ...base, createdAt: Number.NaN })).toBe(false);
+    expect(isTask({ ...base, createdAt: 1 })).toBe(true);
+    expect(isTask({ ...base, createdAt: 0 })).toBe(true);
+  });
+});
+
+describe("concurrent writers (round-8 regression)", () => {
+  /**
+   * Lost update = another tab commits between our READ and our WRITE.
+   *
+   * Two earlier attempts at this test were wrong, and both are worth
+   * remembering:
+   *  1. Injecting into our own outgoing setItem payload — the other task
+   *     survives even with buggy code, so the test proves nothing.
+   *  2. Injecting on getItem but RETURNING the pre-injection value — the
+   *     implementation then correctly reads an empty store, so the test
+   *     fails against correct code.
+   *
+   * Correct shape: seed the other tab's commit so it is VISIBLE to our read,
+   * then assert our write preserves it. A stale-snapshot implementation
+   * (read once at module/arg time, write later) drops it.
+   */
+  it("preserves a task another tab committed before our write", () => {
+    // Another tab has already committed its task.
+    saveTasks([
+      { id: "other-tab", title: "FromOtherTab", completed: false, createdAt: 1 },
+    ]);
+    // Our add must merge with what is actually persisted, not clobber it.
+    addTask("Mine");
+    const titles = loadTasks().map((t) => t.title);
+    expect(titles).toContain("FromOtherTab");
+    expect(titles).toContain("Mine");
+  });
+
+  it("merges rather than overwrites when the store changes mid-operation", () => {
+    // Simulate a commit landing after the caller took its snapshot: the
+    // caller hands appendTasks only ITS record, and the store already holds
+    // another tab's. A plain saveTasks([...snapshot, mine]) loses the other.
+    saveTasks([
+      { id: "a", title: "TabA", completed: false, createdAt: 1 },
+    ]);
+    const mine = { id: "b", title: "TabB", completed: false, createdAt: 2 };
+    appendTasks([mine]);
+    expect(loadTasks().map((t) => t.title).sort()).toEqual(["TabA", "TabB"]);
+  });
+
+  it("appendTasks is idempotent on a repeated id", () => {
+    const t = { id: "x", title: "Once", completed: false, createdAt: 1 };
+    appendTasks([t]);
+    appendTasks([t]);
+    expect(loadTasks()).toHaveLength(1);
+  });
+
+  it("re-reads at the write boundary rather than trusting a stale snapshot", () => {
+    // Another tab persists BEFORE our add begins.
+    saveTasks([{ id: "pre", title: "PreExisting", completed: false, createdAt: 1 }]);
+    addTask("New");
+    expect(loadTasks().map((t) => t.title)).toEqual(["PreExisting", "New"]);
+  });
+
+  it("never duplicates a task id under repeated adds", () => {
+    addTask("A");
+    addTask("B");
+    addTask("C");
+    const ids = loadTasks().map((t) => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("sortNewestFirst (TOD-2)", () => {
+  const t = (id: string, createdAt: number): Task => ({
+    id,
+    title: id,
+    completed: false,
+    createdAt,
+  });
+
+  it("returns tasks newest-first (createdAt descending)", () => {
+    const sorted = sortNewestFirst([t("old", 1), t("new", 3), t("mid", 2)]);
+    expect(sorted.map((x) => x.id)).toEqual(["new", "mid", "old"]);
+  });
+
+  it("is stable for equal timestamps (keeps stored order)", () => {
+    const sorted = sortNewestFirst([t("a", 5), t("b", 5), t("c", 5)]);
+    expect(sorted.map((x) => x.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("is pure: does not mutate the input, returns a new array", () => {
+    const input = [t("old", 1), t("new", 2)];
+    const sorted = sortNewestFirst(input);
+    expect(input.map((x) => x.id)).toEqual(["old", "new"]);
+    expect(sorted).not.toBe(input);
+  });
+
+  it("handles an empty list", () => {
+    expect(sortNewestFirst([])).toEqual([]);
+  });
+});
+
+describe("toggleTask (TOD-3)", () => {
+  const seed = (completed: boolean): Task => {
+    const task: Task = {
+      id: "a",
+      title: "Toggle me",
+      completed,
+      createdAt: 1,
+    };
+    saveTasks([task]);
+    return task;
+  };
+
+  it("flips completed and persists it", () => {
+    const original = seed(false);
+    const result = toggleTask("a");
+    expect(result).not.toBeNull();
+    expect(result?.task.completed).toBe(true);
+    expect(result?.tasks).toEqual([{ ...original, completed: true }]);
+    expect(loadTasks()).toEqual([{ ...original, completed: true }]);
+  });
+
+  it("double-toggle restores the original record exactly", () => {
+    const original = seed(false);
+    toggleTask("a");
+    const restored = toggleTask("a");
+    expect(restored?.task).toEqual(original);
+    expect(loadTasks()).toEqual([original]);
+  });
+
+  it("toggles only the target task, leaving siblings untouched", () => {
+    saveTasks([
+      { id: "a", title: "Target", completed: false, createdAt: 1 },
+      { id: "b", title: "Bystander", completed: true, createdAt: 2 },
+    ]);
+    toggleTask("a");
+    const tasks = loadTasks();
+    expect(tasks.find((t) => t.id === "a")?.completed).toBe(true);
+    expect(tasks.find((t) => t.id === "b")).toEqual({
+      id: "b",
+      title: "Bystander",
+      completed: true,
+      createdAt: 2,
+    });
+  });
+
+  it("preserves tasks another tab committed before our write", () => {
+    seed(false);
+    saveTasks([
+      { id: "a", title: "Toggle me", completed: false, createdAt: 1 },
+      { id: "other", title: "FromOtherTab", completed: false, createdAt: 2 },
+    ]);
+    toggleTask("a");
+    expect(loadTasks().map((t) => t.id).sort()).toEqual(["a", "other"]);
+    expect(loadTasks().find((t) => t.id === "a")?.completed).toBe(true);
+  });
+
+  it("merges a commit landing between the first read and the write", () => {
+    // Round-1 review finding (mutation-proven): the original toggleTask
+    // overwrote the array from its first read, dropping a task another tab
+    // committed in between. Injection fires after the first getItem returns
+    // and before the write-boundary re-read — the closable window. (A commit
+    // inside the final setItem itself is the platform's no-CAS limit.)
+    seed(false);
+    const realGet = Storage.prototype.getItem;
+    const realSet = Storage.prototype.setItem;
+    let gets = 0;
+    const spy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(function (this: Storage, key: string) {
+        if (key === "todo-demo:tasks") {
+          gets += 1;
+          if (gets === 2) {
+            const other = {
+              id: "other-tab", title: "theirs", completed: false, createdAt: 99,
+            };
+            const current = JSON.parse(realGet.call(this, key) || "[]");
+            realSet.call(this, key, JSON.stringify([...current, other]));
+          }
+        }
+        return realGet.call(this, key);
+      });
+    toggleTask("a");
+    spy.mockRestore();
+    const tasks = loadTasks();
+    expect(tasks.map((t) => t.title).sort()).toEqual(["Toggle me", "theirs"]);
+    expect(tasks.find((t) => t.id === "a")?.completed).toBe(true);
+  });
+
+  it("notifies subscribers once per successful toggle", () => {
+    seed(false);
+    let calls = 0;
+    const unsubscribe = subscribe(() => {
+      calls += 1;
+    });
+    toggleTask("a");
+    expect(calls).toBe(1);
+    toggleTask("a");
+    expect(calls).toBe(2);
+    unsubscribe();
+    toggleTask("a");
+    expect(calls).toBe(2);
+  });
+
+  it("returns null for an unknown id, leaving the store untouched", () => {
+    const original = seed(false);
+    let calls = 0;
+    const unsubscribe = subscribe(() => {
+      calls += 1;
+    });
+    expect(toggleTask("missing")).toBeNull();
+    expect(loadTasks()).toEqual([original]);
+    expect(calls).toBe(0);
+    unsubscribe();
+  });
+
+  it("propagates storage failures without mutating storage or notifying", () => {
+    const original = seed(false);
+    let calls = 0;
+    const unsubscribe = subscribe(() => {
+      calls += 1;
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    expect(() => toggleTask("a")).toThrow();
+    expect(loadTasks()).toEqual([original]);
+    expect(calls).toBe(0);
+    unsubscribe();
+  });
+
+  it("propagates storage READ errors (round-2: no silent unknown-id)", () => {
+    seed(false);
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Storage disabled", "SecurityError");
+    });
+    // The tolerant loadTasks still renders empty; the mutation path must
+    // surface the access failure so the UI can alert instead of staying
+    // silent on an "unknown id".
+    expect(loadTasks()).toEqual([]);
+    expect(() => toggleTask("a")).toThrow();
+  });
+});
+
+describe("deleteTask (TOD-4)", () => {
+  const seedThree = () =>
+    saveTasks([
+      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
+      { id: "b", title: "Beta", completed: true, createdAt: 2 },
+      { id: "c", title: "Gamma", completed: false, createdAt: 3 },
+    ]);
+
+  it("removes only the target task and persists the remainder", () => {
+    seedThree();
+    const result = deleteTask("b");
+    expect(result).not.toBeNull();
+    expect(result?.task).toEqual({
+      id: "b", title: "Beta", completed: true, createdAt: 2,
+    });
+    expect(result?.tasks.map((t) => t.id)).toEqual(["a", "c"]);
+    expect(loadTasks().map((t) => t.id)).toEqual(["a", "c"]);
+    // The returned snapshot IS what was committed — callers render from it.
+    expect(result?.tasks).toEqual(loadTasks());
+  });
+
+  it("deleting an absent id is a no-op: null, no write, no notification", () => {
+    seedThree();
+    const before = localStorage.getItem("todo-demo:tasks");
+    const setSpy = vi.spyOn(Storage.prototype, "setItem");
+    let calls = 0;
+    const unsubscribe = subscribe(() => {
+      calls += 1;
+    });
+    expect(deleteTask("missing")).toBeNull();
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(localStorage.getItem("todo-demo:tasks")).toBe(before);
+    expect(calls).toBe(0);
+    unsubscribe();
+  });
+
+  it("deleting the last task persists an empty list", () => {
+    saveTasks([{ id: "solo", title: "Only", completed: false, createdAt: 1 }]);
+    const result = deleteTask("solo");
+    expect(result?.tasks).toEqual([]);
+    expect(loadTasks()).toEqual([]);
+    expect(localStorage.getItem("todo-demo:tasks")).toBe("[]");
+  });
+
+  it("preserves tasks another tab committed before our write", () => {
+    seedThree();
+    saveTasks([
+      ...loadTasks(),
+      { id: "other", title: "FromOtherTab", completed: false, createdAt: 4 },
+    ]);
+    const result = deleteTask("b");
+    expect(result?.tasks.map((t) => t.id).sort()).toEqual(["a", "c", "other"]);
+    expect(loadTasks().map((t) => t.id).sort()).toEqual(["a", "c", "other"]);
+  });
+
+  it("merges a commit landing between the first read and the write", () => {
+    // Same closable window as the toggle round-1 probe: a commit injected
+    // after the first getItem and before the write-boundary re-read must
+    // survive. A stale-snapshot overwrite drops it.
+    saveTasks([{ id: "a", title: "Target", completed: false, createdAt: 1 }]);
+    const realGet = Storage.prototype.getItem;
+    const realSet = Storage.prototype.setItem;
+    let gets = 0;
+    const spy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(function (this: Storage, key: string) {
+        if (key === "todo-demo:tasks") {
+          gets += 1;
+          if (gets === 2) {
+            const other = {
+              id: "other-tab", title: "theirs", completed: false, createdAt: 99,
+            };
+            const current = JSON.parse(realGet.call(this, key) || "[]");
+            realSet.call(this, key, JSON.stringify([...current, other]));
+          }
+        }
+        return realGet.call(this, key);
+      });
+    const result = deleteTask("a");
+    spy.mockRestore();
+    expect(result?.tasks.map((t) => t.id)).toEqual(["other-tab"]);
+    expect(loadTasks().map((t) => t.title)).toEqual(["theirs"]);
+  });
+
+  it("returns null when another tab removed the target between reads", () => {
+    saveTasks([{ id: "a", title: "Gone soon", completed: false, createdAt: 1 }]);
+    const realGet = Storage.prototype.getItem;
+    const realSet = Storage.prototype.setItem;
+    let gets = 0;
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
+      this: Storage, key: string,
+    ) {
+      if (key === "todo-demo:tasks") {
+        gets += 1;
+        if (gets === 2) realSet.call(this, key, "[]");
+      }
+      return realGet.call(this, key);
+    });
+    expect(deleteTask("a")).toBeNull();
+  });
+
+  it("notifies subscribers once per successful delete, never on a no-op", () => {
+    seedThree();
+    let calls = 0;
+    const unsubscribe = subscribe(() => {
+      calls += 1;
+    });
+    deleteTask("a");
+    expect(calls).toBe(1);
+    deleteTask("missing");
+    expect(calls).toBe(1);
+    unsubscribe();
+    deleteTask("b");
+    expect(calls).toBe(1);
+  });
+
+  it("propagates storage WRITE failures without mutating storage or notifying", () => {
+    seedThree();
+    const before = loadTasks();
+    let calls = 0;
+    const unsubscribe = subscribe(() => {
+      calls += 1;
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    expect(() => deleteTask("b")).toThrow();
+    expect(loadTasks()).toEqual(before);
+    expect(calls).toBe(0);
+    unsubscribe();
+  });
+
+  it("propagates storage READ errors (strict mutation read)", () => {
+    seedThree();
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Storage disabled", "SecurityError");
+    });
+    // Tolerant load still renders empty; the mutation path must surface the
+    // access failure instead of silently treating it as "unknown id".
+    expect(loadTasks()).toEqual([]);
+    expect(() => deleteTask("b")).toThrow();
+  });
+});
+
+describe("TOD-5 — filter view", () => {
+  const seed = () =>
+    saveTasks([
+      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
+      { id: "b", title: "Beta", completed: true, createdAt: 2 },
+      { id: "c", title: "Gamma", completed: false, createdAt: 3 },
+    ]);
+
+  describe("filterTasks helper (pure)", () => {
+    it("returns all tasks for the all filter", () => {
+      seed();
+      const tasks = loadTasks();
+      expect(filterTasks(tasks, "all").map((t) => t.id)).toEqual(["a", "b", "c"]);
+    });
+
+    it("returns only uncompleted tasks for active", () => {
+      seed();
+      expect(filterTasks(loadTasks(), "active").map((t) => t.id)).toEqual(["a", "c"]);
+    });
+
+    it("returns only completed tasks for completed", () => {
+      seed();
+      expect(filterTasks(loadTasks(), "completed").map((t) => t.id)).toEqual(["b"]);
+    });
+
+    it("is pure: does not mutate the input, returns a new array", () => {
+      seed();
+      const input = loadTasks();
+      const out = filterTasks(input, "active");
+      expect(input.map((t) => t.id)).toEqual(["a", "b", "c"]);
+      expect(out).not.toBe(input);
+    });
+
+    it("handles an empty list under every filter", () => {
+      expect(filterTasks([], "all")).toEqual([]);
+      expect(filterTasks([], "active")).toEqual([]);
+      expect(filterTasks([], "completed")).toEqual([]);
+    });
+  });
+
+  describe("filter persistence round-trip", () => {
+    it("round-trips each valid filter value", () => {
+      for (const f of ["all", "active", "completed"] as const) {
+        saveFilter(f);
+        expect(loadFilter()).toBe(f);
+      }
+    });
+
+    it("falls back to all for an invalid stored value", () => {
+      localStorage.setItem("todo-demo:filter", "not-a-filter");
+      expect(loadFilter()).toBe("all");
+    });
+
+    it("N3 carry-forward: falls back to all when getItem THROWS", () => {
+      // A throwing localStorage.getItem must not crash the mount — loadFilter
+      // wraps the access like loadTasks does (TOD-2 review N3, deferred).
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new DOMException("Storage disabled", "SecurityError");
+      });
+      expect(loadFilter()).toBe("all");
+    });
+
+    it("saveFilter notifies subscribers", () => {
+      let calls = 0;
+      const unsubscribe = subscribe(() => {
+        calls += 1;
+      });
+      saveFilter("active");
+      expect(calls).toBe(1);
+      unsubscribe();
+      saveFilter("completed");
+      expect(calls).toBe(1);
+    });
+  });
+});
+
+--- src/App.tsx @ 48ee26407 ---
+import { useRef, useState } from "react";
+import type { FormEvent } from "react";
+import {
+  addTask,
+  deleteTask,
+  filterTasks,
+  loadFilter,
+  loadTasks,
+  saveFilter,
+  sortNewestFirst,
+  toggleTask,
+  type Filter,
+  type Task,
+} from "./store";
+
+/**
+ * TOD-1 — add a task; TOD-2 — list tasks; TOD-3 — complete/uncomplete;
+ * TOD-4 — delete a task; TOD-5 — filter view. Form + list on the store
+ * seam (src/store.ts is the only module touching localStorage). Ordering,
+ * the empty state and filtering live here; the store owns persistence.
+ */
+const FILTERS: { value: Filter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "completed", label: "Completed" },
+];
+
+function viewLabel(filter: Filter): string {
+  return filter === "all" ? "all tasks" : `${filter} tasks`;
+}
+
+export default function App() {
+  const [tasks, setTasks] = useState<Task[]>(() => sortNewestFirst(loadTasks()));
+  const [filter, setFilter] = useState<Filter>(() => loadFilter());
+  const [title, setTitle] = useState("");
+  const [rejected, setRejected] = useState(false);
+  const [storageFailed, setStorageFailed] = useState(false);
+  // Polite live region: every successful mutation is announced, not just
+  // errors. A sighted user sees the list change; a screen-reader user must
+  // be told, or the action is silent (round-5 finding).
+  const [announcement, setAnnouncement] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  // TOD-5 AC2: the visible list is the filtered subset; the count reflects
+  // it. `tasks` stays the FULL committed list so filtering never touches
+  // task data (AC4) and hidden tasks survive mutations.
+  const visible = filterTasks(tasks, filter);
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      const task = addTask(title);
+      if (!task) {
+        // AC2: empty/whitespace rejected — no task created, input keeps focus.
+        setRejected(true);
+        inputRef.current?.focus();
+        return;
+      }
+      // Read back from the store, not from React state: another tab may have
+      // persisted tasks since this component last rendered. Spreading stale
+      // `tasks` would silently drop them until reload. Order at the view
+      // boundary so adds and reloads both render newest-first (TOD-2 AC1).
+      const next = sortNewestFirst(loadTasks());
+      setTasks(next);
+      setTitle("");
+      setRejected(false);
+      setStorageFailed(false);
+      // Include the running total: identical live-region text does NOT
+      // re-trigger an announcement, so two tasks with the same title would
+      // otherwise announce only once. The count is both distinct per add and
+      // useful information ("3 tasks" tells the user where they stand).
+      setAnnouncement(
+        `Added ${task.title}. ${next.length} ${next.length === 1 ? "task" : "tasks"}.`,
+      );
+      inputRef.current?.focus();
+    } catch {
+      setStorageFailed(true);
+      inputRef.current?.focus();
+    }
+  }
+
+  function handleToggle(id: string) {
+    try {
+      const result = toggleTask(id);
+      if (!result) return;
+      const toggled = result.task;
+      // Render from the COMMITTED snapshot the store just wrote — a
+      // post-write readback is a fresh fallible I/O that can fail after a
+      // successful save and wipe the visible list (round-3 finding).
+      const next = sortNewestFirst(result.tasks);
+      setTasks(next);
+      setStorageFailed(false);
+      // A successful mutation also clears any pending blank-input rejection:
+      // the shared alert prioritizes `rejected`, which would otherwise keep
+      // showing "Give the task a name" after a successful toggle (round-1
+      // finding; same class as the failure-path masking fixed in TOD-3).
+      setRejected(false);
+      // Include the completed count: direction-specific wording alone does
+      // NOT distinguish completing two DIFFERENT tasks with the same title
+      // (identical live-region text never re-announces — round-2 finding,
+      // same class as the TOD-1 add announcement).
+      const done = next.filter((t) => t.completed).length;
+      setAnnouncement(
+        toggled.completed
+          ? `Completed ${toggled.title}. ${done} of ${next.length} done.`
+          : `Marked ${toggled.title} as active. ${done} of ${next.length} done.`,
+      );
+      // TOD-5: under a filter the toggled row may leave the view (completing
+      // under Active, un-completing under Completed). Its checkbox unmounts
+      // and focus would drop to the body — move to a surviving IN-VIEW
+      // control, or the input when the lookup misses (TOD-4's pattern).
+      const inView = filterTasks(next, filter);
+      if (!inView.some((t) => t.id === id)) {
+        const survivor = inView[0];
+        const survivorBtn = survivor
+          ? document.getElementById(`task-delete-${survivor.id}`)
+          : null;
+        if (survivorBtn) {
+          survivorBtn.focus();
+        } else {
+          inputRef.current?.focus();
+        }
+      }
+    } catch {
+      // AC5: `tasks` is untouched, so the controlled checkbox reverts to the
+      // persisted state on re-render — the UI never shows an unsaved flip.
+      // The failure surfaces on the same assertive alert the add form uses.
+      // Clear a pending blank-input rejection first: the shared alert
+      // prioritizes `rejected`, which would otherwise mask the storage
+      // error with "Give the task a name" (round-2 finding).
+      setRejected(false);
+      setStorageFailed(true);
+    }
+  }
+
+  function handleDelete(id: string) {
+    try {
+      const result = deleteTask(id);
+      if (!result) {
+        // Another tab already deleted this task. Drop the obsolete row from
+        // local state — no storage read/write, no deletion announcement
+        // (nothing was deleted HERE). Round-2 finding: the early return
+        // left a stale row and count, even for the last task.
+        setTasks((prev) => prev.filter((t) => t.id !== id));
+        inputRef.current?.focus();
+        return;
+      }
+      // Render from the COMMITTED snapshot — no post-write readback, same
+      // contract as toggle (a fallible read after a successful save can
+      // wipe the visible list).
+      const next = sortNewestFirst(result.tasks);
+      setTasks(next);
+      setStorageFailed(false);
+      // Clear a pending blank-input rejection on success too — a stale
+      // assertive "Give the task a name" after a successful delete is
+      // misleading (round-1 finding, same class as the toggle path).
+      setRejected(false);
+      // Operation-specific wording plus the remaining count: two deletes
+      // of same-title tasks must still re-announce (identical live-region
+      // text never fires twice — same class as the add/toggle findings).
+      setAnnouncement(
+        `Deleted ${result.task.title}. ${next.length} ${next.length === 1 ? "task" : "tasks"} left.`,
+      );
+      // The deleted row's button may have owned keyboard focus; removing
+      // it drops focus to the body. Move to a surviving IN-VIEW delete
+      // control (a task hidden by the filter has no mounted button), or
+      // the new-task input as the stable fallback (round-2 finding). The
+      // survivor may be a task another tab just added — its button is not
+      // mounted yet (React batches setTasks), so fall back whenever the
+      // lookup misses, not only when the committed list is empty (round-3).
+      const survivor = filterTasks(next, filter).find((t) => t.id !== id);
+      const survivorBtn = survivor
+        ? document.getElementById(`task-delete-${survivor.id}`)
+        : null;
+      if (survivorBtn) {
+        survivorBtn.focus();
+      } else {
+        inputRef.current?.focus();
+      }
+    } catch {
+      // AC5: `tasks` is untouched, so the row stays visible while the store
+      // still holds it — no silent loss. Shared assertive alert; clear the
+      // blank-input flag first so it cannot mask the storage error.
+      setRejected(false);
+      setStorageFailed(true);
+    }
+  }
+
+  function handleFilter(next: Filter) {
+    try {
+      // AC4: persist ONLY the filter key — never the task data. The visible
+      // subset is derived from the full `tasks` state at render time.
+      saveFilter(next);
+      setFilter(next);
+      setRejected(false);
+      setStorageFailed(false);
+      // Announce the new view and its filtered count (polite region). The
+      // label + count differ per selection, so switches always re-announce.
+      const count = filterTasks(tasks, next).length;
+      setAnnouncement(
+        `Showing ${viewLabel(next)}. ${count} ${count === 1 ? "task" : "tasks"}.`,
+      );
+    } catch {
+      // A failed persist leaves the selection unchanged — no unsaved view
+      // is ever shown. Shared assertive alert; clear the blank-input flag
+      // first so it cannot mask the storage error.
+      setRejected(false);
+      setStorageFailed(true);
+    }
+  }
+
+  return (
+    <main className="app">
+      <header className="app-header">
+        <p className="eyebrow">local-first · no account</p>
+        <h1>To-Do</h1>
+        <p className="tagline">Small steps, written down.</p>
+      </header>
+
+      <form className="add-form" onSubmit={handleSubmit} noValidate>
+        <label className="visually-hidden" htmlFor="new-task">
+          New task
+        </label>
+        <div className={rejected ? "add-row add-row--rejected" : "add-row"}>
+          <input
+            id="new-task"
+            ref={inputRef}
+            className="add-input"
+            type="text"
+            value={title}
+            onChange={(event) => {
+              setTitle(event.target.value);
+              if (rejected) setRejected(false);
+              if (storageFailed) setStorageFailed(false);
+            }}
+            placeholder="What needs doing?"
+            autoComplete="off"
+            autoFocus
+            aria-invalid={rejected}
+            aria-describedby="add-hint"
+          />
+          <button className="add-button" type="submit">
+            Add
+          </button>
+        </div>
+        <p
+          id="add-hint"
+          className={
+            rejected || storageFailed
+              ? "add-hint add-hint--error"
+              : "add-hint"
+          }
+          role={rejected || storageFailed ? "alert" : undefined}
+        >
+          {rejected
+            ? "Give the task a name — blank tasks don’t count."
+            : storageFailed
+              ? "Task couldn’t be saved. Check browser storage and try again."
+              : "Press Enter or hit Add. Everything stays in this browser."}
+        </p>
+      </form>
+
+      {/* Always mounted: a live region added at the same time as its text is
+          frequently missed by screen readers. */}
+      <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </p>
+
+      {/* TOD-5 AC1: All / Active / Completed. Toggle buttons carry
+          aria-pressed so the selection is exposed to assistive tech; the
+          group is labelled for screen readers. */}
+      <div className="filter-bar" role="group" aria-label="Filter tasks">
+        {FILTERS.map(({ value, label }) => (
+          <button
+            key={value}
+            type="button"
+            className="filter-button"
+            aria-pressed={filter === value}
+            onClick={() => handleFilter(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <section className="list-section" aria-label="Tasks">
+        <p data-testid="task-count" className="task-count">
+          {visible.length === 1 ? "1 task" : `${visible.length} tasks`}
+        </p>
+        {visible.length > 0 ? (
+          <ul className="task-list">
+            {visible.map((task) => (
+              <li
+                key={task.id}
+                className={
+                  task.completed ? "task-item task-item--completed" : "task-item"
+                }
+              >
+                {/* TOD-3 AC1: the checkbox takes the marker slot the decorative
+                    dot held. Controlled by the store-backed state, so a failed
+                    persist reverts it (AC5) instead of showing an unsaved flip.
+                    The title is a real <label>, so clicking the text toggles
+                    too (round-1 MINOR-3). */}
+                <input
+                  id={`task-toggle-${task.id}`}
+                  type="checkbox"
+                  checked={task.completed}
+                  onChange={() => handleToggle(task.id)}
+                />
+                <label className="task-title" htmlFor={`task-toggle-${task.id}`}>
+                  {task.title}
+                </label>
+                {/* TOD-4 AC1: per-task delete, named for screen readers via
+                    aria-label; the ✕ glyph is CSS content so the row's text
+                    stays the task title alone. type="button" — never submits
+                    the add form. */}
+                <button
+                  id={`task-delete-${task.id}`}
+                  type="button"
+                  className="task-delete"
+                  aria-label={`Delete ${task.title}`}
+                  onClick={() => handleDelete(task.id)}
+                />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          // TOD-2 AC2/AC5: empty (or corrupt) store renders a friendly line,
+          // never a blank section. Reuses the theme's .tagline — no new CSS.
+          <p data-testid="empty-state" className="tagline">
+            Nothing here yet — add your first task above.
+          </p>
+        )}
+      </section>
+
+      <footer className="app-footer">
+        <p>Saved to this browser only — reload-safe, account-free.</p>
+      </footer>
+    </main>
+  );
+}
+
+--- src/App.test.tsx @ 48ee26407 ---
+/// <reference types="node" />
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import App from "./App";
+import { loadTasks, saveTasks } from "./store";
+
+// The real stylesheet, read from disk and injected only where computed style
+// is asserted: vitest runs with css:false, which stubs CSS imports (?raw and
+// ?inline both come back empty), so a disk read is the only way to test the
+// actual theme without touching the vitest config. Anchored to this file,
+// not the cwd, so it survives runners invoked from elsewhere.
+const themeCss = readFileSync(join(__dirname, "index.css"), "utf8");
+
+beforeEach(() => {
+  localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("TOD-1 — add a task", () => {
+  it("typing + Add creates a visible task", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Buy oat milk");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(screen.getByRole("listitem")).toHaveTextContent("Buy oat milk");
+    expect(input).toHaveValue("");
+    expect(loadTasks().map((t) => t.title)).toEqual(["Buy oat milk"]);
+  });
+
+  it("Enter submits", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Ship the demo{Enter}");
+
+    expect(screen.getByRole("listitem")).toHaveTextContent("Ship the demo");
+    expect(loadTasks().map((t) => t.title)).toEqual(["Ship the demo"]);
+    expect(input).toHaveValue(""); // review nit: assert input clears after submit
+  });
+
+  it("whitespace-only input is rejected and the input keeps focus", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "   ");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(loadTasks()).toEqual([]);
+    expect(input).toHaveFocus();
+  });
+
+  it("empty input is rejected and the input keeps focus", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(loadTasks()).toEqual([]);
+    expect(input).toHaveFocus();
+  });
+
+  it("retains the draft and reports storage failures accessibly", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Keep this draft");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Task couldn’t be saved. Check browser storage and try again.",
+    );
+    expect(input).toHaveValue("Keep this draft");
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("new tasks appear immediately and accumulate in the list", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "First{Enter}");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    await user.type(input, "Second{Enter}");
+
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    // TOD-2 owns render order (newest-first); this test only asserts that
+    // both adds accumulate. Strict ordering is covered by the TOD-2 tests
+    // with fixed timestamps, so same-millisecond adds cannot flake here.
+    const titles = items.map((n) => n.textContent);
+    expect(titles.some((t) => t?.includes("First"))).toBe(true);
+    expect(titles.some((t) => t?.includes("Second"))).toBe(true);
+    expect(input).toHaveFocus();
+  });
+
+  it("reload restores the task (store round-trip)", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    await user.type(
+      screen.getByRole("textbox", { name: /new task/i }),
+      "Persist me{Enter}",
+    );
+    expect(loadTasks().map((t) => t.title)).toEqual(["Persist me"]);
+
+    // Simulate a page reload: tear down the tree, mount fresh from the store.
+    unmount();
+    render(<App />);
+    expect(screen.getByRole("listitem")).toHaveTextContent("Persist me");
+  });
+});
+
+describe("malformed storage does not break mount (round-3 regression)", () => {
+  it("renders the empty state when stored entries are null", () => {
+    localStorage.setItem("todo-demo:tasks", "[null]");
+    render(<App />);
+    expect(screen.getByRole("heading", { name: /to-do/i })).toBeInTheDocument();
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("renders when entries are partial objects", () => {
+    localStorage.setItem("todo-demo:tasks", JSON.stringify([{ id: "x" }]));
+    render(<App />);
+    expect(screen.getByRole("heading", { name: /to-do/i })).toBeInTheDocument();
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("still renders the valid entries alongside malformed ones", () => {
+    localStorage.setItem(
+      "todo-demo:tasks",
+      JSON.stringify([null, { id: "ok", title: "Valid", completed: false, createdAt: 1 }]),
+    );
+    render(<App />);
+    expect(screen.getByRole("listitem")).toHaveTextContent("Valid");
+  });
+});
+
+describe("screen-reader announcements (round-5 regression)", () => {
+  it("exposes a polite live region on mount", () => {
+    render(<App />);
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveAttribute("aria-atomic", "true");
+  });
+
+  it("announces a successful add", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Announce me{Enter}");
+    expect(screen.getByRole("status")).toHaveTextContent("Added Announce me. 1 task.");
+  });
+
+  it("announces each subsequent add", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "First{Enter}");
+    await user.type(input, "Second{Enter}");
+    expect(screen.getByRole("status")).toHaveTextContent("Added Second. 2 tasks.");
+  });
+
+  it("does not announce a rejected empty submit", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("keeps errors on the assertive alert, successes on the polite status", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Doomed{Enter}");
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    vi.restoreAllMocks();
+  });
+});
+
+describe("repeated titles still announce (round-6 regression)", () => {
+  it("changes the live-region text when the same title is added twice", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Same{Enter}");
+    const first = screen.getByRole("status").textContent;
+    await user.type(input, "Same{Enter}");
+    const second = screen.getByRole("status").textContent;
+    expect(second).not.toBe(first);
+    expect(second).toContain("2 tasks");
+  });
+
+  it("announces three identical adds distinctly", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    const seen = new Set<string>();
+    for (let i = 0; i < 3; i += 1) {
+      await user.type(input, "Dup{Enter}");
+      seen.add(screen.getByRole("status").textContent ?? "");
+    }
+    expect(seen.size).toBe(3);
+  });
+});
+
+describe("cross-tab consistency (round-7 regression)", () => {
+  it("includes tasks persisted by another tab after an add", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "Mine{Enter}");
+    saveTasks([
+      { id: "other", title: "FromOtherTab", completed: false, createdAt: 1 },
+      { id: "mine", title: "Mine", completed: false, createdAt: 2 },
+    ]);
+    await user.type(input, "Second{Enter}");
+    const items = screen.getAllByRole("listitem").map((n) => n.textContent);
+    expect(items.some((t) => t?.includes("FromOtherTab"))).toBe(true);
+    expect(items.some((t) => t?.includes("Second"))).toBe(true);
+  });
+
+  it("announces the true persisted total, not a stale local count", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    saveTasks([
+      { id: "a", title: "A", completed: false, createdAt: 1 },
+      { id: "b", title: "B", completed: false, createdAt: 2 },
+    ]);
+    await user.type(input, "C{Enter}");
+    expect(screen.getByRole("status")).toHaveTextContent("3 tasks");
+  });
+});
+
+describe("TOD-2 — list tasks", () => {
+  it("renders tasks newest-first (createdAt descending)", () => {
+    // Seed out of order: the view must sort, not trust storage order.
+    saveTasks([
+      { id: "old", title: "Oldest task", completed: false, createdAt: 1 },
+      { id: "new", title: "Newest task", completed: false, createdAt: 3 },
+      { id: "mid", title: "Middle task", completed: false, createdAt: 2 },
+    ]);
+    render(<App />);
+    const titles = screen.getAllByRole("listitem").map((n) => n.textContent);
+    expect(titles).toEqual(["Newest task", "Middle task", "Oldest task"]);
+  });
+
+  it("shows a friendly empty-state message when there are no tasks", () => {
+    render(<App />);
+    expect(screen.getByTestId("empty-state")).toHaveTextContent(
+      /nothing here yet/i,
+    );
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+    expect(screen.queryByRole("list")).toBeNull();
+  });
+
+  it("count matches the task total and updates live on add", async () => {
+    saveTasks([
+      { id: "a", title: "A", completed: false, createdAt: 1 },
+      { id: "b", title: "B", completed: false, createdAt: 2 },
+      { id: "c", title: "C", completed: true, createdAt: 3 },
+    ]);
+    render(<App />);
+    // Count reflects ALL tasks, completed included (filtering is TOD-5).
+    expect(screen.getByTestId("task-count")).toHaveTextContent("3 tasks");
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByRole("textbox", { name: /new task/i }),
+      "One more{Enter}",
+    );
+    expect(screen.getByTestId("task-count")).toHaveTextContent("4 tasks");
+    expect(screen.getAllByRole("listitem")).toHaveLength(4);
+  });
+
+  it("uses singular wording for exactly one task", () => {
+    saveTasks([{ id: "a", title: "Solo", completed: false, createdAt: 1 }]);
+    render(<App />);
+    expect(screen.getByTestId("task-count").textContent).toBe("1 task");
+  });
+
+  it("reload restores the list, newest-first, from the store TOD-1 writes", async () => {
+    // Deterministic clock: each add gets a strictly later createdAt, so the
+    // newest-first assertion cannot flake on same-millisecond adds.
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    const input = screen.getByRole("textbox", { name: /new task/i });
+    await user.type(input, "First{Enter}");
+    await user.type(input, "Second{Enter}");
+    expect(loadTasks().map((t) => t.title)).toEqual(["First", "Second"]);
+    // Assert the RENDERED order immediately after adding, before unmount:
+    // storage order alone would not catch a missing post-add sort (Copilot
+    // round-2 finding — mutation-verified: deleting the post-add sort left
+    // the whole suite green until this assertion existed).
+    expect(
+      screen.getAllByRole("listitem").map((n) => n.textContent),
+    ).toEqual(["Second", "First"]);
+
+    // Simulate a page reload: tear down, mount fresh from the same store.
+    unmount();
+    render(<App />);
+    const titles = screen.getAllByRole("listitem").map((n) => n.textContent);
+    expect(titles).toEqual(["Second", "First"]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
+  });
+
+  it("corrupt stored JSON renders the empty state instead of crashing", () => {
+    localStorage.setItem("todo-demo:tasks", "{definitely not json");
+    render(<App />);
+    expect(screen.getByTestId("empty-state")).toHaveTextContent(
+      /nothing here yet/i,
+    );
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("malformed array entries render the empty state instead of crashing", () => {
+    // Partial objects (no leading null): a missing per-entry guard would let
+    // these reach the render as list items with undefined titles. A leading
+    // null would throw into loadTasks' outer catch and mask the gap — this
+    // payload fails when the isTask guard is removed (mutation-verified).
+    localStorage.setItem(
+      "todo-demo:tasks",
+      '[{"id":"x"},{"id":"y","title":"no completed flag"}]',
+    );
+    render(<App />);
+    expect(screen.getByTestId("empty-state")).toHaveTextContent(
+      /nothing here yet/i,
+    );
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+});
+
+describe("TOD-3 — complete / uncomplete", () => {
+  const seedTwo = () =>
+    saveTasks([
+      { id: "a", title: "Write the tests", completed: false, createdAt: 1 },
+      { id: "b", title: "Ship the story", completed: false, createdAt: 2 },
+    ]);
+
+  it("AC1: every task has a checkbox toggle named for its task", () => {
+    seedTwo();
+    render(<App />);
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes).toHaveLength(2);
+    expect(
+      screen.getByRole("checkbox", { name: "Ship the story" }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "Write the tests" }),
+    ).not.toBeChecked();
+  });
+
+  it("checkbox toggles the task and persists completed=true", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    const box = screen.getByRole("checkbox", { name: "Ship the story" });
+    await user.click(box);
+    expect(box).toBeChecked();
+    const stored = loadTasks();
+    expect(stored.find((t) => t.id === "b")?.completed).toBe(true);
+    expect(stored.find((t) => t.id === "a")?.completed).toBe(false);
+    // Toggling never reorders the list (TOD-2 AC1 holds through mutations).
+    expect(
+      screen.getAllByRole("listitem").map((n) => n.textContent),
+    ).toEqual(["Ship the story", "Write the tests"]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
+  });
+
+  it("AC4: toggling twice returns to the original state, in view and store", async () => {
+    seedTwo();
+    const original = loadTasks();
+    const user = userEvent.setup();
+    render(<App />);
+    const box = screen.getByRole("checkbox", { name: "Ship the story" });
+    await user.click(box);
+    expect(box).toBeChecked();
+    await user.click(box);
+    expect(box).not.toBeChecked();
+    expect(loadTasks()).toEqual(original);
+    expect(
+      screen.getByRole("checkbox", { name: "Write the tests" }),
+    ).not.toBeChecked();
+  });
+
+  it("AC2: completed titles render strikethrough (and muted), active ones do not", () => {
+    // Computed style from the REAL theme file — vitest css:false means the
+    // stylesheet must be injected here; asserting a class name alone would
+    // pass even if the CSS rule were missing.
+    const style = document.createElement("style");
+    style.textContent = themeCss;
+    document.head.appendChild(style);
+    try {
+      saveTasks([
+        { id: "done", title: "Finished chore", completed: true, createdAt: 2 },
+        { id: "todo", title: "Open chore", completed: false, createdAt: 1 },
+      ]);
+      render(<App />);
+      const doneTitle = screen.getByText("Finished chore");
+      const todoTitle = screen.getByText("Open chore");
+      const doneStyle = getComputedStyle(doneTitle);
+      const todoStyle = getComputedStyle(todoTitle);
+      expect(doneStyle.textDecorationLine).toBe("line-through");
+      expect(todoStyle.textDecorationLine).toBe("none");
+      // Contrast-safe muted ink: --ink-soft (#6f6353) on --surface-raised
+      // (#fffefb) is 5.8:1 in light, 6.5:1 in dark — WCAG AA.
+      expect(doneStyle.color).toBe("rgb(111, 99, 83)");
+      expect(todoStyle.color).toBe("rgb(43, 33, 24)");
+    } finally {
+      style.remove();
+    }
+  });
+
+  it("strikethrough appears on toggle and clears on untoggle", async () => {
+    const style = document.createElement("style");
+    style.textContent = themeCss;
+    document.head.appendChild(style);
+    try {
+      seedTwo();
+      const user = userEvent.setup();
+      render(<App />);
+      const box = screen.getByRole("checkbox", { name: "Ship the story" });
+      expect(getComputedStyle(screen.getByText("Ship the story")).textDecorationLine).toBe("none");
+      await user.click(box);
+      expect(getComputedStyle(screen.getByText("Ship the story")).textDecorationLine).toBe("line-through");
+      await user.click(box);
+      expect(getComputedStyle(screen.getByText("Ship the story")).textDecorationLine).toBe("none");
+    } finally {
+      style.remove();
+    }
+  });
+
+  it("AC3: toggle state survives reload (fresh mount reads the store)", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    await user.click(screen.getByRole("checkbox", { name: "Ship the story" }));
+    expect(loadTasks().find((t) => t.id === "b")?.completed).toBe(true);
+
+    // Simulate a page reload: tear down, mount fresh from the same store.
+    unmount();
+    render(<App />);
+    expect(
+      screen.getByRole("checkbox", { name: "Ship the story" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "Write the tests" }),
+    ).not.toBeChecked();
+  });
+
+  it("toggle state changes are announced in the live region", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    const box = screen.getByRole("checkbox", { name: "Ship the story" });
+    await user.click(box);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Completed Ship the story.",
+    );
+    await user.click(box);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Marked Ship the story as active.",
+    );
+  });
+
+  it("AC5: storage throws on toggle -> revert + accessible error, no silent unsaved state", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    const box = screen.getByRole("checkbox", { name: "Ship the story" });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    await user.click(box);
+    // Controlled checkbox snaps back to the persisted state…
+    expect(box).not.toBeChecked();
+    // …and the failure is announced assertively, not swallowed.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /couldn’t be saved/i,
+    );
+    expect(loadTasks().find((t) => t.id === "b")?.completed).toBe(false);
+    // No success announcement for a write that never happened.
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("AC5: a failed un-toggle of a completed task also reverts", async () => {
+    saveTasks([
+      { id: "done", title: "Already done", completed: true, createdAt: 1 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    const box = screen.getByRole("checkbox", { name: "Already done" });
+    expect(box).toBeChecked();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    await user.click(box);
+    expect(box).toBeChecked();
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+    expect(loadTasks()[0].completed).toBe(true);
+  });
+
+  it("toggle failure clears on a later successful add", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    const spy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Quota exceeded", "QuotaExceededError");
+      });
+    await user.click(screen.getByRole("checkbox", { name: "Ship the story" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    spy.mockRestore();
+    await user.type(
+      screen.getByRole("textbox", { name: /new task/i }),
+      "Recovery{Enter}",
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Added Recovery.");
+  });
+
+  it("a successful toggle clears a prior storage-failure alert", async () => {
+    // Symmetric coverage (round-1 MINOR-1): deleting setStorageFailed(false)
+    // from handleToggle's success path must turn this test red.
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    const spy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Quota exceeded", "QuotaExceededError");
+      });
+    await user.click(screen.getByRole("checkbox", { name: "Ship the story" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    spy.mockRestore();
+    await user.click(screen.getByRole("checkbox", { name: "Ship the story" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Ship the story" })).toBeChecked();
+  });
+
+  it("completing two same-title tasks announces both (count distinguishes)", async () => {
+    // Round-2 finding: direction-specific wording alone produced identical
+    // live-region text for two different tasks with the same title — the
+    // second success never re-announced. The completed count distinguishes.
+    saveTasks([
+      { id: "a", title: "Same name", completed: false, createdAt: 1 },
+      { id: "b", title: "Same name", completed: false, createdAt: 2 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    const boxes = screen.getAllByRole("checkbox", { name: "Same name" });
+    await user.click(boxes[0]);
+    const first = screen.getByRole("status").textContent;
+    await user.click(boxes[1]);
+    const second = screen.getByRole("status").textContent;
+    expect(first).toMatch(/Completed Same name/);
+    expect(second).not.toBe(first);
+    expect(second).toMatch(/2 of 2 done/);
+  });
+
+  it("a toggle storage failure is not masked by a pending blank-input rejection", async () => {
+    // Round-2 finding: the shared alert prioritizes `rejected`; without
+    // clearing it in the toggle failure path the user saw "Give the task a
+    // name" instead of the storage error.
+    saveTasks([{ id: "a", title: "Task", completed: false, createdAt: 1 }]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    await user.click(screen.getByRole("checkbox", { name: "Task" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+  });
+
+  it("a storage READ failure during toggle surfaces the alert, not silence", async () => {
+    // Round-2 finding: loadTasks swallowed the read error into "unknown id"
+    // and the UI stayed silent. Mutation reads now propagate access errors.
+    saveTasks([{ id: "a", title: "Task", completed: false, createdAt: 1 }]);
+    const user = userEvent.setup();
+    render(<App />);
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Storage disabled", "SecurityError");
+    });
+    await user.click(screen.getByRole("checkbox", { name: "Task" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+    expect(screen.getByRole("checkbox", { name: "Task" })).not.toBeChecked();
+  });
+
+  it("a POST-WRITE read failure keeps the committed list visible (round-3)", async () => {
+    // The write succeeds; only the readback fails. Rendering from the
+    // committed snapshot (not a fresh read) keeps tasks, counts and the
+    // announcement truthful instead of wiping the list to "0 of 0 done".
+    saveTasks([
+      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
+      { id: "b", title: "Beta", completed: false, createdAt: 2 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    const realGet = Storage.prototype.getItem;
+    let gets = 0;
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
+      this: Storage, key: string,
+    ) {
+      if (key === "todo-demo:tasks") {
+        gets += 1;
+        if (gets >= 3) {
+          throw new DOMException("Storage disabled", "SecurityError");
+        }
+      }
+      return realGet.call(this, key);
+    });
+    await user.click(screen.getByRole("checkbox", { name: "Beta" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByRole("checkbox", { name: "Beta" })).toBeChecked();
+    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
+    expect(screen.getByRole("status")).toHaveTextContent(/1 of 2 done/);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("TOD-4 — delete a task", () => {
+  const seedTwo = () =>
+    saveTasks([
+      { id: "a", title: "Write the tests", completed: false, createdAt: 1 },
+      { id: "b", title: "Ship the story", completed: false, createdAt: 2 },
+    ]);
+
+  it("AC1: every task has a delete control named for its task", () => {
+    seedTwo();
+    render(<App />);
+    const buttons = screen.getAllByRole("button", { name: /^delete/i });
+    expect(buttons).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /delete.*Write the tests/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("AC2: delete removes the task from the list and the store, count updates", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("listitem")).toHaveTextContent("Write the tests");
+    expect(loadTasks().map((t) => t.id)).toEqual(["a"]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
+    // Newest-first order holds through deletion (TOD-2 AC1).
+    await user.type(
+      screen.getByRole("textbox", { name: /new task/i }),
+      "Newer{Enter}",
+    );
+    expect(
+      screen.getAllByRole("listitem").map((n) => n.textContent),
+    ).toEqual(["Newer", "Write the tests"]);
+  });
+
+  it("AC3: deletion survives reload (fresh mount reads the store)", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    expect(loadTasks().map((t) => t.id)).toEqual(["a"]);
+
+    // Simulate a page reload: tear down, mount fresh from the same store.
+    unmount();
+    render(<App />);
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("listitem")).toHaveTextContent("Write the tests");
+    expect(
+      screen.queryByRole("button", { name: /delete.*Ship the story/i }),
+    ).toBeNull();
+  });
+
+  it("AC4: deleting the last task returns to the TOD-2 empty state", async () => {
+    saveTasks([{ id: "solo", title: "Last one", completed: false, createdAt: 1 }]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Last one/i }),
+    );
+    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(screen.queryByRole("list")).toBeNull();
+    expect(screen.getByTestId("empty-state")).toHaveTextContent(
+      /nothing here yet/i,
+    );
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+    expect(loadTasks()).toEqual([]);
+  });
+
+  it("deletions are announced in the polite live region, distinctly", async () => {
+    saveTasks([
+      { id: "a", title: "Same name", completed: false, createdAt: 1 },
+      { id: "b", title: "Same name", completed: false, createdAt: 2 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    const buttons = screen.getAllByRole("button", { name: /delete.*Same name/i });
+    await user.click(buttons[0]);
+    const first = screen.getByRole("status").textContent;
+    expect(first).toMatch(/Deleted Same name/i);
+    expect(first).toMatch(/1 task/);
+    await user.click(screen.getByRole("button", { name: /delete.*Same name/i }));
+    const second = screen.getByRole("status").textContent;
+    // Same title twice must still re-announce: the count distinguishes.
+    expect(second).not.toBe(first);
+    expect(second).toMatch(/0 tasks/);
+    // Wording differs from add/toggle announcements (operation-specific).
+    expect(second).not.toMatch(/^Added|^Completed|^Marked/);
+  });
+
+  it("AC5: storage throws on delete -> task stays visible, accessible error", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    // No silent data loss: the task remains in the list AND the store.
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(loadTasks().map((t) => t.id)).toEqual(["a", "b"]);
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+    // No success announcement for a delete that never happened.
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
+  });
+
+  it("AC5: a storage READ failure during delete surfaces the alert", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Storage disabled", "SecurityError");
+    });
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("a delete storage failure is not masked by a pending blank-input rejection", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("a successful delete clears a prior storage-failure alert", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    const spy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Quota exceeded", "QuotaExceededError");
+      });
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    spy.mockRestore();
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("a POST-WRITE read failure keeps the committed list visible", async () => {
+    // The delete commits; only a later read fails. Rendering from the
+    // committed snapshot keeps the remaining task, count and announcement
+    // truthful instead of wiping the list (same contract as TOD-3 round-3).
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    const realGet = Storage.prototype.getItem;
+    let gets = 0;
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
+      this: Storage, key: string,
+    ) {
+      if (key === "todo-demo:tasks") {
+        gets += 1;
+        if (gets >= 3) {
+          throw new DOMException("Storage disabled", "SecurityError");
+        }
+      }
+      return realGet.call(this, key);
+    });
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("listitem")).toHaveTextContent("Write the tests");
+    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
+    expect(screen.getByRole("status")).toHaveTextContent(/Deleted Ship the story/);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("delete includes tasks another tab committed (committed-snapshot render)", async () => {
+    seedTwo();
+    const user = userEvent.setup();
+    render(<App />);
+    // Another tab commits before our delete; the store must merge, and the
+    // rendered list must come from the committed snapshot.
+    saveTasks([
+      ...loadTasks(),
+      { id: "other", title: "FromOtherTab", completed: false, createdAt: 3 },
+    ]);
+    await user.click(
+      screen.getByRole("button", { name: /delete.*Ship the story/i }),
+    );
+    const titles = screen.getAllByRole("listitem").map((n) => n.textContent);
+    expect(titles).toEqual(["FromOtherTab", "Write the tests"]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
+  });
+
+  it("delete control carries the theme's opaque focus ring", async () => {
+    const style = document.createElement("style");
+    style.textContent = themeCss;
+    document.head.appendChild(style);
+    try {
+      seedTwo();
+      render(<App />);
+      const user = userEvent.setup();
+      // autoFocus starts on the input; keyboard Tab activates :focus-visible.
+      // TOD-5 added the All/Active/Completed buttons between Add and the list.
+      await user.tab(); // Add
+      await user.tab(); // All filter
+      await user.tab(); // Active filter
+      await user.tab(); // Completed filter
+      await user.tab(); // newest checkbox
+      await user.tab(); // newest delete button
+      const button = screen.getByRole("button", {
+        name: /delete.*Ship the story/i,
+      });
+      expect(button).toHaveFocus();
+      const s = getComputedStyle(button);
+      expect(s.outlineStyle).toBe("solid");
+      expect(s.outlineColor).toBe("rgb(178, 62, 2)");
+    } finally {
+      style.remove();
+    }
+  });
+
+  it("a successful delete clears a pending blank-input rejection", async () => {
+    // Round-1 finding: the shared alert prioritizes `rejected`; without
+    // clearing it on success the user saw a stale "Give the task a name"
+    // assertive alert after a successful delete.
+    saveTasks([{ id: "a", title: "Task", completed: false, createdAt: 1 }]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
+    await user.click(screen.getByRole("button", { name: "Delete Task" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent(/Deleted Task/);
+  });
+
+  it("a successful toggle clears a pending blank-input rejection", async () => {
+    // Same class in the toggle success path (pre-existing TOD-3 defect,
+    // found by the TOD-4 review — fixed here with its own regression).
+    saveTasks([{ id: "a", title: "Task", completed: false, createdAt: 1 }]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
+    await user.click(screen.getByRole("checkbox", { name: "Task" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent(/Completed Task/);
+  });
+
+  it("a delete of an already-removed task drops the stale row silently", async () => {
+    // Round-2 finding: another tab deleted the task after mount; the
+    // null-return early exit left the obsolete row and count visible.
+    saveTasks([
+      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
+      { id: "b", title: "Beta", completed: false, createdAt: 2 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    saveTasks([{ id: "a", title: "Alpha", completed: false, createdAt: 1 }]);
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    await user.click(screen.getByRole("button", { name: "Delete Beta" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
+    expect(writes).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("a stale delete of the LAST task falls through to the empty state", async () => {
+    saveTasks([{ id: "a", title: "Alpha", completed: false, createdAt: 1 }]);
+    const user = userEvent.setup();
+    render(<App />);
+    saveTasks([]);
+    await user.click(screen.getByRole("button", { name: "Delete Alpha" }));
+    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+  });
+
+  it("keyboard delete moves focus to a surviving control, not the body", async () => {
+    // Round-2 finding: removing the focused button dropped focus to the
+    // body — keyboard/screen-reader users lost their interaction context.
+    saveTasks([
+      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
+      { id: "b", title: "Beta", completed: false, createdAt: 2 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    const btn = screen.getByRole("button", { name: "Delete Beta" });
+    btn.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("deleting the last task moves focus to the new-task input", async () => {
+    saveTasks([{ id: "a", title: "Alpha", completed: false, createdAt: 1 }]);
+    const user = userEvent.setup();
+    render(<App />);
+    const btn = screen.getByRole("button", { name: "Delete Alpha" });
+    btn.focus();
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: /new task/i }),
+    );
+  });
+
+  it("focus falls back to the input when the survivor button is not mounted yet", async () => {
+    // Round-3 finding: another tab adds a NEWER task after mount; the
+    // committed snapshot picks it as the survivor, but its button is not
+    // in the DOM yet (React batches setTasks). The lookup misses — focus
+    // must still land on the input, not the body.
+    saveTasks([
+      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
+      { id: "b", title: "Beta", completed: false, createdAt: 2 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    saveTasks([
+      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
+      { id: "b", title: "Beta", completed: false, createdAt: 2 },
+      { id: "c", title: "Gamma", completed: false, createdAt: 3 },
+    ]);
+    const btn = screen.getByRole("button", { name: "Delete Beta" });
+    btn.focus();
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+});
+
+describe("TOD-5 — filter view", () => {
+  // Newest-first render order: Gamma (active), Beta (done), Alpha (active).
+  const seedMixed = () =>
+    saveTasks([
+      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
+      { id: "b", title: "Beta", completed: true, createdAt: 2 },
+      { id: "c", title: "Gamma", completed: false, createdAt: 3 },
+    ]);
+
+  it("AC1: three filter controls — All / Active / Completed, All selected by default", () => {
+    render(<App />);
+    const all = screen.getByRole("button", { name: "All" });
+    const active = screen.getByRole("button", { name: "Active" });
+    const completed = screen.getByRole("button", { name: "Completed" });
+    expect(all).toHaveAttribute("aria-pressed", "true");
+    expect(active).toHaveAttribute("aria-pressed", "false");
+    expect(completed).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("AC2: each filter shows the right tasks, newest-first", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
+      "Gamma", "Beta", "Alpha",
+    ]);
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
+      "Gamma", "Alpha",
+    ]);
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
+      "Beta",
+    ]);
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
+      "Gamma", "Beta", "Alpha",
+    ]);
+  });
+
+  it("AC2: the count reflects the FILTERED set, with singular wording", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("3 tasks");
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    expect(screen.getByTestId("task-count").textContent).toBe("1 task");
+  });
+
+  it("AC3: filter selection survives reload", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    expect(localStorage.getItem("todo-demo:filter")).toBe("completed");
+
+    // Simulate a page reload: tear down, mount fresh from the same store.
+    unmount();
+    render(<App />);
+    expect(screen.getByRole("button", { name: "Completed" })).toHaveAttribute(
+      "aria-pressed", "true",
+    );
+    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
+      "Beta",
+    ]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
+  });
+
+  it("AC4: switching filters never writes task data", async () => {
+    seedMixed();
+    const before = localStorage.getItem("todo-demo:tasks");
+    const original = loadTasks();
+    const user = userEvent.setup();
+    render(<App />);
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    await user.click(screen.getByRole("button", { name: "All" }));
+    // The filter key may be written; the TASK key must never be touched.
+    for (const call of writes.mock.calls) {
+      expect(call[0]).not.toBe("todo-demo:tasks");
+    }
+    expect(localStorage.getItem("todo-demo:tasks")).toBe(before);
+    expect(loadTasks()).toEqual(original);
+  });
+
+  it("AC5: an invalid stored filter falls back to All", () => {
+    seedMixed();
+    localStorage.setItem("todo-demo:filter", "bogus");
+    render(<App />);
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
+      "aria-pressed", "true",
+    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+  });
+
+  it("AC5: an unreadable filter (getItem throws) falls back to All, tasks still render", () => {
+    seedMixed();
+    const realGet = Storage.prototype.getItem;
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
+      this: Storage, key: string,
+    ) {
+      if (key === "todo-demo:filter") {
+        throw new DOMException("Storage disabled", "SecurityError");
+      }
+      return realGet.call(this, key);
+    });
+    render(<App />);
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
+      "aria-pressed", "true",
+    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+  });
+
+  it("AC5: totally unreadable storage still mounts (empty state, All selected)", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Storage disabled", "SecurityError");
+    });
+    render(<App />);
+    expect(screen.getByRole("heading", { name: /to-do/i })).toBeInTheDocument();
+    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
+      "aria-pressed", "true",
+    );
+  });
+
+  it("filter switches announce the new view and its count, distinctly", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    const active = screen.getByRole("status").textContent;
+    expect(active).toMatch(/active/i);
+    expect(active).toMatch(/2 tasks/);
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    const completed = screen.getByRole("status").textContent;
+    expect(completed).toMatch(/completed/i);
+    expect(completed).toMatch(/1 task/);
+    expect(completed).not.toBe(active);
+    // View announcements stay on the polite region, never the alert.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a filter switch clears a pending blank-input rejection", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a filter switch clears a prior storage-failure alert", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    const spy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Quota exceeded", "QuotaExceededError");
+      });
+    await user.click(screen.getByRole("checkbox", { name: "Gamma" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    spy.mockRestore();
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent(/active/i);
+  });
+
+  it("a failed filter save alerts assertively and keeps the current selection", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+    // Selection reverted: All still pressed, full list still visible.
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
+      "aria-pressed", "true",
+    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("a failed filter save is not masked by a pending blank-input rejection", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
+  });
+
+  it("toggling under the Active filter drops the row from view, not the store", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    const box = screen.getByRole("checkbox", { name: "Gamma" });
+    box.focus();
+    await user.keyboard(" ");
+    // Committed snapshot: Gamma is completed, so it leaves the Active view…
+    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
+      "Alpha",
+    ]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
+    // …but the store keeps it (toggle, not delete).
+    expect(loadTasks().find((t) => t.id === "c")?.completed).toBe(true);
+    expect(loadTasks()).toHaveLength(3);
+    expect(screen.getByRole("status")).toHaveTextContent(/Completed Gamma/);
+    // The focused checkbox unmounted — focus must not drop to the body.
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("un-toggling under the Completed filter drops the row from view", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    await user.click(screen.getByRole("checkbox", { name: "Beta" }));
+    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+    expect(loadTasks().find((t) => t.id === "b")?.completed).toBe(false);
+    expect(loadTasks()).toHaveLength(3);
+  });
+
+  it("deleting under a filter renders the committed snapshot and keeps focus in view", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    const btn = screen.getByRole("button", { name: "Delete Gamma" });
+    btn.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
+      "Alpha",
+    ]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
+    // Beta is completed and hidden by the filter — it must survive the delete.
+    expect(loadTasks().map((t) => t.id).sort()).toEqual(["a", "b"]);
+    // Focus lands on the surviving IN-VIEW delete control, not the body.
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Delete Alpha" }),
+    );
+  });
+
+  it("deleting the last visible task under a filter keeps hidden data intact", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    const btn = screen.getByRole("button", { name: "Delete Beta" });
+    btn.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+    // The active tasks are hidden, not deleted.
+    expect(loadTasks().map((t) => t.id).sort()).toEqual(["a", "c"]);
+    // No surviving in-view control: focus falls back to the new-task input.
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: /new task/i }),
+    );
+  });
+
+  it("an empty filtered view shows a friendly message, not a blank section", () => {
+    saveTasks([{ id: "a", title: "Alpha", completed: false, createdAt: 1 }]);
+    localStorage.setItem("todo-demo:filter", "completed");
+    render(<App />);
+    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
+    expect(loadTasks()).toHaveLength(1);
+  });
+
+  it("adding under the Completed filter persists the task without showing it", async () => {
+    seedMixed();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Completed" }));
+    await user.type(
+      screen.getByRole("textbox", { name: /new task/i }),
+      "Fresh{Enter}",
+    );
+    // New tasks are active: persisted and announced, but not in this view.
+    expect(loadTasks().map((t) => t.title)).toContain("Fresh");
+    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
+      "Beta",
+    ]);
+    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
+    expect(screen.getByRole("status")).toHaveTextContent(/Added Fresh/);
+  });
+
+  it("filter controls carry the theme's opaque focus ring", async () => {
+    const style = document.createElement("style");
+    style.textContent = themeCss;
+    document.head.appendChild(style);
+    try {
+      render(<App />);
+      const user = userEvent.setup();
+      await user.tab(); // Add
+      await user.tab(); // All
+      await user.tab(); // Active
+      const button = screen.getByRole("button", { name: "Active" });
+      expect(button).toHaveFocus();
+      const s = getComputedStyle(button);
+      expect(s.outlineStyle).toBe("solid");
+      expect(s.outlineColor).toBe("rgb(178, 62, 2)");
+    } finally {
+      style.remove();
+    }
+  });
+});
+
+--- src/index.css @ 48ee26407 ---
+/* ── To-Do Demo · paper-ledger theme ─────────────────────────────────
+   Warm paper + ink, persimmon accent. Light and dark both committed;
+   every color derives from the ledger palette, nothing default-gray. */
+
+:root {
+  --paper: #f7f1e5;
+  --paper-deep: #efe5d2;
+  --surface: #fffcf5;
+  --surface-raised: #fffefb;
+  --ink: #2b2118;
+  --ink-soft: #6f6353;
+  --ink-faint: var(--ink-soft);
+  --rule: #e3d8c2;
+  --rule-strong: #cdbfa4;
+
+  --persimmon: #d94f04;
+  --persimmon-deep: #b23e02;
+  --persimmon-wash: rgba(217, 79, 4, 0.09);
+  /* Button fill/label pair: audited for WCAG AA across gradient stops AND
+     hover/active brightness. Do not lighten without re-running the gate. */
+  --btn-fill-from: #b23e02;
+  --btn-fill-to: #8a2f02;
+  --btn-label: #fff8f0;
+  --marigold: #f2a007;
+  --leaf: #1a7f4e;
+  --sky: #1f5eff;
+  --danger: #c22f2f;
+  --danger-wash: rgba(194, 47, 47, 0.08);
+
+  /* Decorative glow only — translucent, never used as a focus INDICATOR. */
+  --focus-ring: rgba(217, 79, 4, 0.35);
+  /* Opaque, >=3:1 against every surface: the actual keyboard focus indicator. */
+  --focus-indicator: #b23e02;
+  /* Selection background must carry >=4.5:1 against --surface text. */
+  --selection-bg: #b23e02;
+  --shadow-card:
+    0 1px 2px rgba(43, 33, 24, 0.06), 0 12px 32px -12px rgba(43, 33, 24, 0.18);
+  --shadow-key:
+    0 1px 0 rgba(255, 255, 255, 0.35) inset, 0 2px 6px rgba(178, 62, 2, 0.35);
+
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+
+  color-scheme: light;
+  font: 17px/1.5 var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #191410;
+    --paper-deep: #120e0b;
+    --surface: #221b15;
+    --surface-raised: #2a221b;
+    --ink: #f0e7d8;
+    --ink-soft: #b3a68f;
+    --ink-faint: var(--ink-soft);
+    --rule: #3a3128;
+    --rule-strong: #4d4234;
+
+    --persimmon: #ff7a2f;
+    --persimmon-deep: #ff9254;
+    --persimmon-wash: rgba(255, 122, 47, 0.12);
+    /* Bright orange fill needs a DARK label; near-white on it is ~2:1. */
+    --btn-fill-from: #ff7a2f;
+    --btn-fill-to: #ff9254;
+    --btn-label: #2b1608;
+    --marigold: #ffb63d;
+    --leaf: #4cc38a;
+    --sky: #6f9aff;
+    --danger: #ff6b5e;
+    --danger-wash: rgba(255, 107, 94, 0.12);
+
+    --focus-ring: rgba(255, 122, 47, 0.4);
+    --focus-indicator: #ff9254;
+    --selection-bg: #ff9254;
+    --shadow-card:
+      0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 36px -12px rgba(0, 0, 0, 0.6);
+    --shadow-key:
+      0 1px 0 rgba(255, 255, 255, 0.15) inset, 0 2px 8px rgba(0, 0, 0, 0.45);
+
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  background:
+    radial-gradient(
+      1100px 520px at 85% -10%,
+      var(--persimmon-wash),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 480px at -10% 110%,
+      rgba(242, 160, 7, 0.08),
+      transparent 55%
+    ),
+    linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
+  background-attachment: fixed;
+}
+
+/* Grain layer — barely-there paper tooth over the gradients. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbar in the ledger's own voice */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--rule-strong);
+  border-radius: 8px;
+  border: 2px solid var(--paper);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--persimmon);
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--surface);
+}
+
+/* ── Shell ─────────────────────────────────────────────────────── */
+
+.app {
+  width: min(640px, 100% - 2.5rem);
+  margin: 0 auto;
+  padding: clamp(2rem, 6vh, 4rem) 0 2rem;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  animation: rise-in 0.5s ease-out both;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--persimmon-deep);
+}
+
+h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: clamp(2.6rem, 8vw, 3.4rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  color: var(--ink);
+}
+
+h1::after {
+  content: "";
+  display: block;
+  width: 3.2rem;
+  height: 4px;
+  margin-top: 0.7rem;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--persimmon), var(--marigold));
+}
+
+.tagline {
+  margin: 0.8rem 0 0;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 1.05rem;
+  color: var(--ink-soft);
+}
+
+/* ── Add form ──────────────────────────────────────────────────── */
+
+.add-form {
+  margin-top: 2rem;
+  animation: rise-in 0.5s 0.08s ease-out both;
+}
+
+.add-row {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.add-row:focus-within {
+  border-color: var(--persimmon);
+  box-shadow:
+    var(--shadow-card),
+    0 0 0 4px var(--focus-ring);
+}
+
+.add-input:focus-visible {
+  outline: 2px solid var(--focus-indicator);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.add-row--rejected {
+  border-color: var(--danger);
+  animation: shake 0.3s ease-in-out;
+}
+
+.add-row--rejected:focus-within {
+  border-color: var(--danger);
+  box-shadow:
+    var(--shadow-card),
+    0 0 0 4px var(--danger-wash);
+}
+
+.add-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.65rem 0.8rem;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.add-input::placeholder {
+  color: var(--ink-faint);
+}
+
+.add-button {
+  flex-shrink: 0;
+  padding: 0.65rem 1.4rem;
+  font: inherit;
+  font-weight: 650;
+  color: var(--btn-label);
+  background: linear-gradient(
+    160deg,
+    var(--btn-fill-from) 0%,
+    var(--btn-fill-to) 100%
+  );
+  border: 0;
+  border-radius: 10px;
+  box-shadow: var(--shadow-key);
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    filter 0.12s ease;
+}
+
+.add-button:hover {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+.add-button:active {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.96);
+}
+
+.add-button:focus-visible {
+  /* Opaque >=3:1 indicator; the row glow is decorative and does not identify
+     which control has focus, so the button carries its own ring. */
+  outline: 3px solid var(--focus-indicator);
+  outline-offset: 2px;
+}
+
+.add-hint {
+  margin: 0.6rem 0.2rem 0;
+  min-height: 1.4em;
+  font-size: 0.83rem;
+  color: var(--ink-faint);
+}
+
+.add-hint--error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* ── Filter bar (TOD-5) ────────────────────────────────────────── */
+
+.filter-bar { display: flex; gap: 0.5rem; margin-top: 1.2rem; }
+.filter-button {
+  font: inherit; font-size: 0.85rem; font-weight: 600;
+  padding: 0.35rem 0.9rem; cursor: pointer;
+  color: var(--ink-soft); background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 999px;
+}
+.filter-button[aria-pressed="true"] {
+  color: var(--persimmon-deep); border-color: var(--persimmon);
+  background: var(--persimmon-wash);
+}
+.filter-button:focus-visible {
+  outline: 2px solid var(--focus-indicator); outline-offset: 2px;
+}
+
+/* ── Task list ─────────────────────────────────────────────────── */
+
+.list-section {
+  margin-top: 1.6rem;
+  animation: rise-in 0.5s 0.16s ease-out both;
+}
+
+.task-count {
+  margin: 0 0 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.task-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  padding: 0.85rem 1.1rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(43, 33, 24, 0.05);
+  animation: task-in 0.28s ease-out both;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.task-item:hover {
+  border-color: var(--rule-strong);
+  transform: translateX(3px);
+}
+
+.task-title {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+/* Round-1 MINOR-2: the checkbox carries the same opaque >=3:1 focus
+   indicator as the other controls — the browser default ring is not
+   guaranteed to meet the theme's contrast on every surface. */
+.task-item input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--focus-indicator);
+  outline-offset: 2px;
+}
+
+/* TOD-3 AC2 — completed state. Muted ink stays AA: --ink-soft on
+   --surface-raised is 5.8:1 (light) / 6.5:1 (dark). */
+.task-item--completed .task-title {
+  text-decoration: line-through;
+  color: var(--ink-soft);
+}
+
+/* TOD-4 delete control. */
+.task-delete {
+  margin-left: auto;
+  padding: 0.1rem 0.45rem;
+  font: 600 0.95rem/1.4 var(--sans);
+  color: var(--danger); /* ~5.6:1 on raised surface, light and dark (AA) */
+  background: none; border: 0; cursor: pointer;
+}
+.task-delete::before { content: "✕"; }
+.task-delete:focus-visible {
+  outline: 2px solid var(--focus-indicator);
+  outline-offset: 2px;
+}
+
+/* ── Footer ────────────────────────────────────────────────────── */
+
+.app-footer {
+  margin-top: auto;
+  padding-top: 2.5rem;
+  animation: rise-in 0.5s 0.24s ease-out both;
+}
+
+.app-footer p {
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--rule-strong);
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+
+/* ── Utilities & motion ────────────────────────────────────────── */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes task-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-5px);
+  }
+  50% {
+    transform: translateX(4px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 480px) {
+  :root {
+    font-size: 16px;
+  }
+
+  .app {
+    width: min(640px, 100% - 1.6rem);
+  }
+
+  .add-button {
+    padding-inline: 1.05rem;
+  }
+}

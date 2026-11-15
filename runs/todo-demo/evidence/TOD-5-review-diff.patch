@@ -1,0 +1,657 @@
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+index 1b5e9b1..500d8b3 100644
+--- a/src/App.test.tsx
++++ b/src/App.test.tsx
+@@ -864,7 +864,11 @@ describe("TOD-4 — delete a task", () => {
+       render(<App />);
+       const user = userEvent.setup();
+       // autoFocus starts on the input; keyboard Tab activates :focus-visible.
++      // TOD-5 added the All/Active/Completed buttons between Add and the list.
+       await user.tab(); // Add
++      await user.tab(); // All filter
++      await user.tab(); // Active filter
++      await user.tab(); // Completed filter
+       await user.tab(); // newest checkbox
+       await user.tab(); // newest delete button
+       const button = screen.getByRole("button", {
+@@ -984,3 +988,322 @@ describe("TOD-4 — delete a task", () => {
+     expect(document.activeElement).not.toBe(document.body);
+   });
+ });
++
++describe("TOD-5 — filter view", () => {
++  // Newest-first render order: Gamma (active), Beta (done), Alpha (active).
++  const seedMixed = () =>
++    saveTasks([
++      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
++      { id: "b", title: "Beta", completed: true, createdAt: 2 },
++      { id: "c", title: "Gamma", completed: false, createdAt: 3 },
++    ]);
++
++  it("AC1: three filter controls — All / Active / Completed, All selected by default", () => {
++    render(<App />);
++    const all = screen.getByRole("button", { name: "All" });
++    const active = screen.getByRole("button", { name: "Active" });
++    const completed = screen.getByRole("button", { name: "Completed" });
++    expect(all).toHaveAttribute("aria-pressed", "true");
++    expect(active).toHaveAttribute("aria-pressed", "false");
++    expect(completed).toHaveAttribute("aria-pressed", "false");
++  });
++
++  it("AC2: each filter shows the right tasks, newest-first", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
++      "Gamma", "Beta", "Alpha",
++    ]);
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
++      "Gamma", "Alpha",
++    ]);
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
++      "Beta",
++    ]);
++    await user.click(screen.getByRole("button", { name: "All" }));
++    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
++      "Gamma", "Beta", "Alpha",
++    ]);
++  });
++
++  it("AC2: the count reflects the FILTERED set, with singular wording", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    expect(screen.getByTestId("task-count")).toHaveTextContent("3 tasks");
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    expect(screen.getByTestId("task-count")).toHaveTextContent("2 tasks");
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    expect(screen.getByTestId("task-count").textContent).toBe("1 task");
++  });
++
++  it("AC3: filter selection survives reload", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    const { unmount } = render(<App />);
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    expect(localStorage.getItem("todo-demo:filter")).toBe("completed");
++
++    // Simulate a page reload: tear down, mount fresh from the same store.
++    unmount();
++    render(<App />);
++    expect(screen.getByRole("button", { name: "Completed" })).toHaveAttribute(
++      "aria-pressed", "true",
++    );
++    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
++      "Beta",
++    ]);
++    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
++  });
++
++  it("AC4: switching filters never writes task data", async () => {
++    seedMixed();
++    const before = localStorage.getItem("todo-demo:tasks");
++    const original = loadTasks();
++    const user = userEvent.setup();
++    render(<App />);
++    const writes = vi.spyOn(Storage.prototype, "setItem");
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    await user.click(screen.getByRole("button", { name: "All" }));
++    // The filter key may be written; the TASK key must never be touched.
++    for (const call of writes.mock.calls) {
++      expect(call[0]).not.toBe("todo-demo:tasks");
++    }
++    expect(localStorage.getItem("todo-demo:tasks")).toBe(before);
++    expect(loadTasks()).toEqual(original);
++  });
++
++  it("AC5: an invalid stored filter falls back to All", () => {
++    seedMixed();
++    localStorage.setItem("todo-demo:filter", "bogus");
++    render(<App />);
++    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
++      "aria-pressed", "true",
++    );
++    expect(screen.getAllByRole("listitem")).toHaveLength(3);
++  });
++
++  it("AC5: an unreadable filter (getItem throws) falls back to All, tasks still render", () => {
++    seedMixed();
++    const realGet = Storage.prototype.getItem;
++    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (
++      this: Storage, key: string,
++    ) {
++      if (key === "todo-demo:filter") {
++        throw new DOMException("Storage disabled", "SecurityError");
++      }
++      return realGet.call(this, key);
++    });
++    render(<App />);
++    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
++      "aria-pressed", "true",
++    );
++    expect(screen.getAllByRole("listitem")).toHaveLength(3);
++  });
++
++  it("AC5: totally unreadable storage still mounts (empty state, All selected)", () => {
++    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
++      throw new DOMException("Storage disabled", "SecurityError");
++    });
++    render(<App />);
++    expect(screen.getByRole("heading", { name: /to-do/i })).toBeInTheDocument();
++    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
++    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
++      "aria-pressed", "true",
++    );
++  });
++
++  it("filter switches announce the new view and its count, distinctly", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    const active = screen.getByRole("status").textContent;
++    expect(active).toMatch(/active/i);
++    expect(active).toMatch(/2 tasks/);
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    const completed = screen.getByRole("status").textContent;
++    expect(completed).toMatch(/completed/i);
++    expect(completed).toMatch(/1 task/);
++    expect(completed).not.toBe(active);
++    // View announcements stay on the polite region, never the alert.
++    expect(screen.queryByRole("alert")).toBeNull();
++  });
++
++  it("a filter switch clears a pending blank-input rejection", async () => {
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: /^add$/i }));
++    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    expect(screen.queryByRole("alert")).toBeNull();
++  });
++
++  it("a filter switch clears a prior storage-failure alert", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    const spy = vi
++      .spyOn(Storage.prototype, "setItem")
++      .mockImplementation(() => {
++        throw new DOMException("Quota exceeded", "QuotaExceededError");
++      });
++    await user.click(screen.getByRole("checkbox", { name: "Gamma" }));
++    expect(screen.getByRole("alert")).toBeInTheDocument();
++    spy.mockRestore();
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    expect(screen.queryByRole("alert")).toBeNull();
++    expect(screen.getByRole("status")).toHaveTextContent(/active/i);
++  });
++
++  it("a failed filter save alerts assertively and keeps the current selection", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
++      throw new DOMException("Quota exceeded", "QuotaExceededError");
++    });
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
++    // Selection reverted: All still pressed, full list still visible.
++    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
++      "aria-pressed", "true",
++    );
++    expect(screen.getAllByRole("listitem")).toHaveLength(3);
++    expect(screen.getByRole("status")).toHaveTextContent("");
++  });
++
++  it("a failed filter save is not masked by a pending blank-input rejection", async () => {
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: /^add$/i }));
++    expect(screen.getByRole("alert")).toHaveTextContent(/give the task a name/i);
++    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
++      throw new DOMException("Quota exceeded", "QuotaExceededError");
++    });
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t be saved/i);
++  });
++
++  it("toggling under the Active filter drops the row from view, not the store", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    const box = screen.getByRole("checkbox", { name: "Gamma" });
++    box.focus();
++    await user.keyboard(" ");
++    // Committed snapshot: Gamma is completed, so it leaves the Active view…
++    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
++      "Alpha",
++    ]);
++    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
++    // …but the store keeps it (toggle, not delete).
++    expect(loadTasks().find((t) => t.id === "c")?.completed).toBe(true);
++    expect(loadTasks()).toHaveLength(3);
++    expect(screen.getByRole("status")).toHaveTextContent(/Completed Gamma/);
++    // The focused checkbox unmounted — focus must not drop to the body.
++    expect(document.activeElement).not.toBe(document.body);
++  });
++
++  it("un-toggling under the Completed filter drops the row from view", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    await user.click(screen.getByRole("checkbox", { name: "Beta" }));
++    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
++    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
++    expect(loadTasks().find((t) => t.id === "b")?.completed).toBe(false);
++    expect(loadTasks()).toHaveLength(3);
++  });
++
++  it("deleting under a filter renders the committed snapshot and keeps focus in view", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: "Active" }));
++    const btn = screen.getByRole("button", { name: "Delete Gamma" });
++    btn.focus();
++    await user.keyboard("{Enter}");
++    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
++      "Alpha",
++    ]);
++    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
++    // Beta is completed and hidden by the filter — it must survive the delete.
++    expect(loadTasks().map((t) => t.id).sort()).toEqual(["a", "b"]);
++    // Focus lands on the surviving IN-VIEW delete control, not the body.
++    expect(document.activeElement).toBe(
++      screen.getByRole("button", { name: "Delete Alpha" }),
++    );
++  });
++
++  it("deleting the last visible task under a filter keeps hidden data intact", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    const btn = screen.getByRole("button", { name: "Delete Beta" });
++    btn.focus();
++    await user.keyboard("{Enter}");
++    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
++    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
++    // The active tasks are hidden, not deleted.
++    expect(loadTasks().map((t) => t.id).sort()).toEqual(["a", "c"]);
++    // No surviving in-view control: focus falls back to the new-task input.
++    expect(document.activeElement).toBe(
++      screen.getByRole("textbox", { name: /new task/i }),
++    );
++  });
++
++  it("an empty filtered view shows a friendly message, not a blank section", () => {
++    saveTasks([{ id: "a", title: "Alpha", completed: false, createdAt: 1 }]);
++    localStorage.setItem("todo-demo:filter", "completed");
++    render(<App />);
++    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
++    expect(screen.getByTestId("task-count")).toHaveTextContent("0 tasks");
++    expect(loadTasks()).toHaveLength(1);
++  });
++
++  it("adding under the Completed filter persists the task without showing it", async () => {
++    seedMixed();
++    const user = userEvent.setup();
++    render(<App />);
++    await user.click(screen.getByRole("button", { name: "Completed" }));
++    await user.type(
++      screen.getByRole("textbox", { name: /new task/i }),
++      "Fresh{Enter}",
++    );
++    // New tasks are active: persisted and announced, but not in this view.
++    expect(loadTasks().map((t) => t.title)).toContain("Fresh");
++    expect(screen.getAllByRole("listitem").map((n) => n.textContent)).toEqual([
++      "Beta",
++    ]);
++    expect(screen.getByTestId("task-count")).toHaveTextContent("1 task");
++    expect(screen.getByRole("status")).toHaveTextContent(/Added Fresh/);
++  });
++
++  it("filter controls carry the theme's opaque focus ring", async () => {
++    const style = document.createElement("style");
++    style.textContent = themeCss;
++    document.head.appendChild(style);
++    try {
++      render(<App />);
++      const user = userEvent.setup();
++      await user.tab(); // Add
++      await user.tab(); // All
++      await user.tab(); // Active
++      const button = screen.getByRole("button", { name: "Active" });
++      expect(button).toHaveFocus();
++      const s = getComputedStyle(button);
++      expect(s.outlineStyle).toBe("solid");
++      expect(s.outlineColor).toBe("rgb(178, 62, 2)");
++    } finally {
++      style.remove();
++    }
++  });
++});
+diff --git a/src/App.tsx b/src/App.tsx
+index 637654d..1bb47f4 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -3,20 +3,35 @@ import type { FormEvent } from "react";
+ import {
+   addTask,
+   deleteTask,
++  filterTasks,
++  loadFilter,
+   loadTasks,
++  saveFilter,
+   sortNewestFirst,
+   toggleTask,
++  type Filter,
+   type Task,
+ } from "./store";
+ 
+ /**
+  * TOD-1 — add a task; TOD-2 — list tasks; TOD-3 — complete/uncomplete;
+- * TOD-4 — delete a task. Form + list on the store seam (src/store.ts is
+- * the only module touching localStorage). Ordering and the empty state
+- * live here; filtering lands in TOD-5.
++ * TOD-4 — delete a task; TOD-5 — filter view. Form + list on the store
++ * seam (src/store.ts is the only module touching localStorage). Ordering,
++ * the empty state and filtering live here; the store owns persistence.
+  */
++const FILTERS: { value: Filter; label: string }[] = [
++  { value: "all", label: "All" },
++  { value: "active", label: "Active" },
++  { value: "completed", label: "Completed" },
++];
++
++function viewLabel(filter: Filter): string {
++  return filter === "all" ? "all tasks" : `${filter} tasks`;
++}
++
+ export default function App() {
+   const [tasks, setTasks] = useState<Task[]>(() => sortNewestFirst(loadTasks()));
++  const [filter, setFilter] = useState<Filter>(() => loadFilter());
+   const [title, setTitle] = useState("");
+   const [rejected, setRejected] = useState(false);
+   const [storageFailed, setStorageFailed] = useState(false);
+@@ -25,6 +40,10 @@ export default function App() {
+   // be told, or the action is silent (round-5 finding).
+   const [announcement, setAnnouncement] = useState("");
+   const inputRef = useRef<HTMLInputElement>(null);
++  // TOD-5 AC2: the visible list is the filtered subset; the count reflects
++  // it. `tasks` stays the FULL committed list so filtering never touches
++  // task data (AC4) and hidden tasks survive mutations.
++  const visible = filterTasks(tasks, filter);
+ 
+   function handleSubmit(event: FormEvent<HTMLFormElement>) {
+     event.preventDefault();
+@@ -85,6 +104,22 @@ export default function App() {
+           ? `Completed ${toggled.title}. ${done} of ${next.length} done.`
+           : `Marked ${toggled.title} as active. ${done} of ${next.length} done.`,
+       );
++      // TOD-5: under a filter the toggled row may leave the view (completing
++      // under Active, un-completing under Completed). Its checkbox unmounts
++      // and focus would drop to the body — move to a surviving IN-VIEW
++      // control, or the input when the lookup misses (TOD-4's pattern).
++      const inView = filterTasks(next, filter);
++      if (!inView.some((t) => t.id === id)) {
++        const survivor = inView[0];
++        const survivorBtn = survivor
++          ? document.getElementById(`task-delete-${survivor.id}`)
++          : null;
++        if (survivorBtn) {
++          survivorBtn.focus();
++        } else {
++          inputRef.current?.focus();
++        }
++      }
+     } catch {
+       // AC5: `tasks` is untouched, so the controlled checkbox reverts to the
+       // persisted state on re-render — the UI never shows an unsaved flip.
+@@ -126,12 +161,13 @@ export default function App() {
+         `Deleted ${result.task.title}. ${next.length} ${next.length === 1 ? "task" : "tasks"} left.`,
+       );
+       // The deleted row's button may have owned keyboard focus; removing
+-      // it drops focus to the body. Move to a surviving delete control, or
++      // it drops focus to the body. Move to a surviving IN-VIEW delete
++      // control (a task hidden by the filter has no mounted button), or
+       // the new-task input as the stable fallback (round-2 finding). The
+       // survivor may be a task another tab just added — its button is not
+       // mounted yet (React batches setTasks), so fall back whenever the
+       // lookup misses, not only when the committed list is empty (round-3).
+-      const survivor = next.find((t) => t.id !== id);
++      const survivor = filterTasks(next, filter).find((t) => t.id !== id);
+       const survivorBtn = survivor
+         ? document.getElementById(`task-delete-${survivor.id}`)
+         : null;
+@@ -149,6 +185,29 @@ export default function App() {
+     }
+   }
+ 
++  function handleFilter(next: Filter) {
++    try {
++      // AC4: persist ONLY the filter key — never the task data. The visible
++      // subset is derived from the full `tasks` state at render time.
++      saveFilter(next);
++      setFilter(next);
++      setRejected(false);
++      setStorageFailed(false);
++      // Announce the new view and its filtered count (polite region). The
++      // label + count differ per selection, so switches always re-announce.
++      const count = filterTasks(tasks, next).length;
++      setAnnouncement(
++        `Showing ${viewLabel(next)}. ${count} ${count === 1 ? "task" : "tasks"}.`,
++      );
++    } catch {
++      // A failed persist leaves the selection unchanged — no unsaved view
++      // is ever shown. Shared assertive alert; clear the blank-input flag
++      // first so it cannot mask the storage error.
++      setRejected(false);
++      setStorageFailed(true);
++    }
++  }
++
+   return (
+     <main className="app">
+       <header className="app-header">
+@@ -206,13 +265,30 @@ export default function App() {
+         {announcement}
+       </p>
+ 
++      {/* TOD-5 AC1: All / Active / Completed. Toggle buttons carry
++          aria-pressed so the selection is exposed to assistive tech; the
++          group is labelled for screen readers. */}
++      <div className="filter-bar" role="group" aria-label="Filter tasks">
++        {FILTERS.map(({ value, label }) => (
++          <button
++            key={value}
++            type="button"
++            className="filter-button"
++            aria-pressed={filter === value}
++            onClick={() => handleFilter(value)}
++          >
++            {label}
++          </button>
++        ))}
++      </div>
++
+       <section className="list-section" aria-label="Tasks">
+         <p data-testid="task-count" className="task-count">
+-          {tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}
++          {visible.length === 1 ? "1 task" : `${visible.length} tasks`}
+         </p>
+-        {tasks.length > 0 ? (
++        {visible.length > 0 ? (
+           <ul className="task-list">
+-            {tasks.map((task) => (
++            {visible.map((task) => (
+               <li
+                 key={task.id}
+                 className={
+diff --git a/src/index.css b/src/index.css
+index 54931fc..04067ef 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -315,6 +315,23 @@ h1::after {
+   font-weight: 600;
+ }
+ 
++/* ── Filter bar (TOD-5) ────────────────────────────────────────── */
++
++.filter-bar { display: flex; gap: 0.5rem; margin-top: 1.2rem; }
++.filter-button {
++  font: inherit; font-size: 0.85rem; font-weight: 600;
++  padding: 0.35rem 0.9rem; cursor: pointer;
++  color: var(--ink-soft); background: var(--surface);
++  border: 1px solid var(--rule); border-radius: 999px;
++}
++.filter-button[aria-pressed="true"] {
++  color: var(--persimmon-deep); border-color: var(--persimmon);
++  background: var(--persimmon-wash);
++}
++.filter-button:focus-visible {
++  outline: 2px solid var(--focus-indicator); outline-offset: 2px;
++}
++
+ /* ── Task list ─────────────────────────────────────────────────── */
+ 
+ .list-section {
+diff --git a/src/store.test.ts b/src/store.test.ts
+index 50e4a87..0cd17c8 100644
+--- a/src/store.test.ts
++++ b/src/store.test.ts
+@@ -9,6 +9,7 @@ import {
+   saveFilter,
+   newId,
+   deleteTask,
++  filterTasks,
+   sortNewestFirst,
+   subscribe,
+   toggleTask,
+@@ -586,3 +587,79 @@ describe("deleteTask (TOD-4)", () => {
+     expect(() => deleteTask("b")).toThrow();
+   });
+ });
++
++describe("TOD-5 — filter view", () => {
++  const seed = () =>
++    saveTasks([
++      { id: "a", title: "Alpha", completed: false, createdAt: 1 },
++      { id: "b", title: "Beta", completed: true, createdAt: 2 },
++      { id: "c", title: "Gamma", completed: false, createdAt: 3 },
++    ]);
++
++  describe("filterTasks helper (pure)", () => {
++    it("returns all tasks for the all filter", () => {
++      seed();
++      const tasks = loadTasks();
++      expect(filterTasks(tasks, "all").map((t) => t.id)).toEqual(["a", "b", "c"]);
++    });
++
++    it("returns only uncompleted tasks for active", () => {
++      seed();
++      expect(filterTasks(loadTasks(), "active").map((t) => t.id)).toEqual(["a", "c"]);
++    });
++
++    it("returns only completed tasks for completed", () => {
++      seed();
++      expect(filterTasks(loadTasks(), "completed").map((t) => t.id)).toEqual(["b"]);
++    });
++
++    it("is pure: does not mutate the input, returns a new array", () => {
++      seed();
++      const input = loadTasks();
++      const out = filterTasks(input, "active");
++      expect(input.map((t) => t.id)).toEqual(["a", "b", "c"]);
++      expect(out).not.toBe(input);
++    });
++
++    it("handles an empty list under every filter", () => {
++      expect(filterTasks([], "all")).toEqual([]);
++      expect(filterTasks([], "active")).toEqual([]);
++      expect(filterTasks([], "completed")).toEqual([]);
++    });
++  });
++
++  describe("filter persistence round-trip", () => {
++    it("round-trips each valid filter value", () => {
++      for (const f of ["all", "active", "completed"] as const) {
++        saveFilter(f);
++        expect(loadFilter()).toBe(f);
++      }
++    });
++
++    it("falls back to all for an invalid stored value", () => {
++      localStorage.setItem("todo-demo:filter", "not-a-filter");
++      expect(loadFilter()).toBe("all");
++    });
++
++    it("N3 carry-forward: falls back to all when getItem THROWS", () => {
++      // A throwing localStorage.getItem must not crash the mount — loadFilter
++      // wraps the access like loadTasks does (TOD-2 review N3, deferred).
++      vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
++        throw new DOMException("Storage disabled", "SecurityError");
++      });
++      expect(loadFilter()).toBe("all");
++    });
++
++    it("saveFilter notifies subscribers", () => {
++      let calls = 0;
++      const unsubscribe = subscribe(() => {
++        calls += 1;
++      });
++      saveFilter("active");
++      expect(calls).toBe(1);
++      unsubscribe();
++      saveFilter("completed");
++      expect(calls).toBe(1);
++    });
++  });
++});
+diff --git a/src/store.ts b/src/store.ts
+index 045c048..6f14f28 100644
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -128,8 +128,15 @@ export function appendTasks(incoming: Task[]): Task[] {
+ }
+ 
+ export function loadFilter(): Filter {
+-  const raw = localStorage.getItem(FILTER_KEY);
+-  return raw === "active" || raw === "completed" ? raw : "all";
++  // N3 carry-forward (TOD-2 review): a throwing getItem must not crash the
++  // mount. Tolerant load mirrors loadTasks — an unreadable filter falls back
++  // to "all" (TOD-5 AC5) instead of propagating.
++  try {
++    const raw = localStorage.getItem(FILTER_KEY);
++    return raw === "active" || raw === "completed" ? raw : "all";
++  } catch {
++    return "all";
++  }
+ }
+ 
+ export function saveFilter(filter: Filter): void {
+@@ -137,6 +144,18 @@ export function saveFilter(filter: Filter): void {
+   emit();
+ }
+ 
++/**
++ * TOD-5 — pure view filter over tasks + selection. Returns a NEW array and
++ * never mutates the input or the store (AC4: switching filters writes no
++ * task data). "all" is the identity subset; active/completed partition by
++ * the completed flag.
++ */
++export function filterTasks(tasks: Task[], filter: Filter): Task[] {
++  if (filter === "active") return tasks.filter((t) => !t.completed);
++  if (filter === "completed") return tasks.filter((t) => t.completed);
++  return [...tasks];
++}
++
+ export function newId(): string {
+   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+ }
