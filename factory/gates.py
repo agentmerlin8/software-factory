@@ -140,6 +140,13 @@ def pre_review(workdir: Path, *, base: str, manifest: list[str],
     if not ok:
         failures.append(f"secrets: {detail}")
 
+    # Round-5 class: successful mutations must be announced, not just errors.
+    from .announcements import check_tree as check_announcements
+    ares = check_announcements(Path(workdir))
+    checks["announcements"] = ares.passed
+    if not ares.passed:
+        failures.append(f"announcements: {ares.named_failures()}")
+
     # Round-3 class: untrusted parse boundaries must validate ELEMENTS.
     from .boundaries import check_tree
     bres = check_tree(Path(workdir))
