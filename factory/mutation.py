@@ -286,6 +286,12 @@ def _stringify_array_malformed(body: str) -> bool:
     for el in elements:
         if not el:
             continue
+        if el.startswith("..."):
+            # Spread of an existing collection: elements unknown, but the
+            # source is loaded/valid data — not a malformed literal claim
+            # (TOD-3 round-1 false positive: a concurrency probe spreads a
+            # valid array and was misread as partial entries).
+            continue
         if re.fullmatch(r"[A-Za-z_$][\w$]*", el):
             keysets.add(None)  # variable: key set unknown
             continue

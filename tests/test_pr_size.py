@@ -36,6 +36,22 @@ def test_total_budget_enforced():
     assert "review budget" in b.named_failures()
 
 
+def test_test_churn_counted_separately():
+    """Owner policy: a well-tested slice is not an oversized one.
+    TOD-3 round 1: 467 lines of which 357 were tests must pass."""
+    b = check([_s("src/store.ts", 60), _s("src/App.tsx", 40),
+               _s("src/store.test.ts", 200), _s("src/App.test.tsx", 160)])
+    assert b.passed, b.named_failures()
+    assert b.tests == 360
+    assert b.product == 100
+
+
+def test_product_over_budget_still_fails_with_tests_present():
+    b = check([_s("src/a.ts", 450), _s("src/a.test.ts", 100)])
+    assert not b.passed
+    assert "review budget" in b.named_failures()
+
+
 def test_file_count_enforced():
     b = check([_s(f"src/f{i}.ts", 10) for i in range(8)])
     assert not b.passed

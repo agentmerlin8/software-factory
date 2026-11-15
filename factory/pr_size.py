@@ -93,17 +93,26 @@ def check(stats: list[DiffStat], *,
           max_total: int = MAX_TOTAL_LINES,
           max_visual: int = MAX_CSS_LINES,
           max_files: int = MAX_FILES) -> SizeBudget:
-    """Budget a change against the <5-round target."""
+    """Budget a change against the <5-round target.
+
+    The line budget applies to PRODUCT + VISUAL churn; test churn is
+    counted and reported separately (owner policy, agentic-software-factory
+    skill: "Count test churn separately from product churn; a well-tested
+    slice is not an oversized one"). TOD-3 round 1 exposed the drift: a
+    467-line diff of which 357 were regression tests was being blocked.
+    """
     total = sum(s.churn for s in stats)
     visual = sum(s.churn for s in stats if s.is_visual)
     tests = sum(s.churn for s in stats if s.is_test)
     product = total - visual - tests
+    review_surface = product + visual
     failures: list[str] = []
     advice: list[str] = []
 
-    if total > max_total:
+    if review_surface > max_total:
         failures.append(
-            f"{total} changed lines exceeds the {max_total}-line review budget")
+            f"{review_surface} product+visual changed lines exceeds the "
+            f"{max_total}-line review budget (tests: {tests}, counted separately)")
         advice.append("split the story: one vertical slice per PR")
     if visual > max_visual:
         failures.append(

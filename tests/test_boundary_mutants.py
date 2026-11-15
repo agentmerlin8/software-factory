@@ -109,6 +109,21 @@ def test_null_led_payload_is_masked_not_a_claim():
     assert _boundary_claims("src/App.test.tsx", MASKED_NULL) == []
 
 
+SPREAD_PROBE = '''
+it("merges a commit landing between the first read and the write", () => {
+  const current = JSON.parse(realGet.call(this, key) || "[]");
+  realSet.call(this, key, JSON.stringify([...current, other]));
+  toggleTask("a");
+});
+'''
+
+
+def test_spread_of_valid_data_is_not_a_claim():
+    # TOD-3 round-1 false positive: a concurrency probe spreads a loaded
+    # (valid) array; the detector misread ...current as partial entries.
+    assert _boundary_claims("src/store.test.ts", SPREAD_PROBE) == []
+
+
 def test_claims_are_per_test_not_per_file():
     text = WEAK + PARSE_ONLY + STRINGIFY
     names = [n for _, n in _boundary_claims("f.ts", text)]
