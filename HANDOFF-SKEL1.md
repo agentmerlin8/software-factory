@@ -1,4 +1,4 @@
-# HANDOFF — SKEL-1 in flight (TOD-1 merged, TOD-2 next)
+# HANDOFF — SKEL-1 in flight (TOD-1 merged, TOD-2 at Copilot gate)
 
 **Updated:** 2026-11-15 · supersedes the work-item table in `HANDOFF.md` §5.
 **Read `HANDOFF.md` first** for cold-start, decisions, board IDs, conventions.
@@ -6,8 +6,8 @@
 ## Where the experiment stands
 
 SKEL-1 (issue #3) = 5 to-do stories through the factory + a control arm.
-**Story 1 of 5 is DONE.** Stories 2–5, the control arm, and the kill-criterion
-comparison remain.
+**Story 1 of 5 is DONE. Story 2 is at the Copilot approval gate (PR #2).**
+Stories 3–5, the control arm, and the kill-criterion comparison remain.
 
 - Product repo: `agentmerlin8/factory-todo-demo` (public), main `d4297a3`.
   Local clone: `~/.hermes/cache/scratch/factory-exp/todo-demo`.
@@ -64,20 +64,17 @@ Use `.venv/bin/python` (pytest lives there).
    → Auto-approval), UI-only, off by default, dismissed on new commits. Enabled
    on both repos. `requestReviewsByLogin` GraphQL is the re-request that registers.
 
-## Next action: TOD-2 (list tasks)
+## Next action: TOD-2 outcome, then TOD-3
 
-Story spec is written and passes `check_story`. Before dispatching:
-
-1. **Size it first** — `factory/pr_size.py` budget. TOD-2 is ordering + empty
-   state + count; it should be well under 400 lines with **zero CSS churn**
-   (the theme already exists — do NOT let the coder restyle).
-2. Manifest: `src/store.ts`, `src/store.test.ts`, `src/App.tsx`, `src/App.test.tsx`.
-   **Exclude `src/index.css`** unless a new element genuinely needs a rule.
-3. Dispatch: coder `qwen4-max-preview`, reviewer `deepseek-v4-pro` (cross-family),
-   fresh context, full files + tools, lens-based prompt.
-4. Gate → update-before-review → review → PR → **Copilot approval required** →
-   human merge. Log every finding: `factory log-finding`.
-5. Target **<5 rounds**. If it exceeds, root-cause before starting TOD-3.
+**TOD-2 status (2026-11-15):** PR #2 open at head `2da0f8c`, CI green,
+Copilot review requested and running. 166 lines / 4 files / **0 CSS** —
+the OC-17 sizing worked. One pre-PR cross-family round: PASS-WITH-NITS,
+M1 (self-certifying component test) fixed + mutation-proven, N3 deferred
+to TOD-5 (carry-forward in its spec). Gate extended: `boundary_mutants`
+(per-test isolation; masked null-led payloads are reviewer-lens territory,
+not deterministic claims — see evidence/TOD-2-gate-extension-proof.py).
+**When Copilot approves: hand Randy the merge. If findings: disposition by
+execution, fix the class, re-request (approval dismisses on new commits).**
 
 Then TOD-3 (complete), TOD-4 (delete), TOD-5 (filter), then the control arm
 (same 5 stories, ONE `hermes -z` session, same model + design doc), then
