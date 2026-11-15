@@ -12,12 +12,23 @@ four intake categories, then hand off to `factory intake generate` for the
 one design doc (PRD). You are the guide, not the decider: the human owns
 every product choice.
 
-## The four categories (REQUIRED_CATEGORIES)
+## The categories (REQUIRED_CATEGORIES)
 
 1. **platform** — where it runs (web browser, desktop, mobile, CLI, …).
 2. **stack** — language/framework/tooling (or "you choose" → you recommend).
 3. **features** — the concrete capabilities, as a list of short verbs.
 4. **look** — look-and-feel in the human's words (theme, mood, density).
+5. **persistence** — where state lives + failure behavior (e.g. localStorage
+   single JSON key; in-memory fallback on write failure). REQUIRED — the
+   INT-4 engineer review flagged its absence as a BLOCKER.
+6. **data_model** — the entity shape(s) with field types, id generation,
+   and any ordering field. REQUIRED — a builder must not invent the schema.
+7. **acceptance** — an object mapping EVERY feature to concrete, testable
+   criteria (the CLI refuses if any feature is uncovered). REQUIRED — the
+   INT-4 engineer review flagged "no ACs" as a BLOCKER.
+8. **assumptions** (optional but encouraged) — resolve ambiguities in the
+   original description explicitly (e.g. "daily" = used daily, not
+   daily-recurrence). Never silently drop a qualifier.
 
 ## Bounded question flow (the grill discipline)
 
