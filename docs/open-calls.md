@@ -287,3 +287,31 @@ overhead ratio" (non-coder tokens / coder tokens) as a headline metric;
 tier the pipeline by risk so small stories skip plan review and use one
 reviewer (ECN-1 / C1). Move seeded-defect reviewer calibration to P3
 (before routing starts), not P6 (ECN-3 / C3).
+## Post-ratification amendments (2026-11-14, EXP-1/2/3)
+
+### OC-14 amendment — public-earlier chosen (Randy, 2026-11-14)
+
+Randy: "We should not be on a free plan… lets just make it public then."
+Verified: `agentmerlin8` is the only org and is genuinely Free; the repos
+were in the right org. Decision: **`software-factory` is now PUBLIC**
+(flipped 2026-11-14, full-history secret scan clean). The org stays Free.
+EXP-3 verified public+Free unlocks branch protection (200), rulesets (201),
+and the strict up-to-date gate (stale merge refused 405, updated merge
+passes). The controller-writer model (OC-14) still stands — agents never
+hold state-repo write tokens — but branch protection is now AVAILABLE as
+defense-in-depth, not unavailable. Evidence:
+`docs/experiments/exp-3-public-gate-2026-11-14.md`.
+
+### OC-15 amendment — original mechanism RESTORED (no controller workaround)
+
+EXP-1 proved the strict setting unavailable on private Free and proposed a
+controller-enforced up-to-dateness check. EXP-3 (public repo) made that
+workaround unnecessary: the native "require branches to be up to date"
+gate works. **OC-15 stands as originally ratified** — enable the branch
+setting; no controller-side staleness enforcement needed. Two configuration
+facts for SKEL-4 (from EXP-3):
+- `strict: true` with an EMPTY required-checks list is a no-op — a real
+  required status check must be registered or stale merges pass through.
+- `enforce_admins: true` blocks direct pushes to main (GH006); factory
+  merges go through PRs, so this is fine, but scaffolding must know it.
+The controller-enforced amendment proposed after EXP-1 is WITHDRAWN.
