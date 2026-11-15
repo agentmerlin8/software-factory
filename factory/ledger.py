@@ -22,6 +22,10 @@ EVENT_TYPES = frozenset({
     "gate_passed", "gate_failed", "review_completed",
     "pr_opened", "human_merged", "story_done", "defect_found",
     "run_completed", "correction",
+    # SKEL-4a review-loop events (docs/plans/skel-4a-review-loop-automation)
+    "review_detected", "finding_verified", "finding_dispositioned",
+    "remediation_pushed", "gate_extended", "review_requested",
+    "loop_converged",
 })
 
 REQUIRED_FIELDS = ("schema", "ts", "event")
