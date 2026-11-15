@@ -37,7 +37,7 @@ Task { id: string (crypto.randomUUID), title: string (non-empty, trimmed), compl
 
 ## Persistence
 
-localStorage, single JSON key 'todo-demo:tasks'; on write failure keep the draft, show an accessible error, commit nothing; on read failure/corruption render the empty state (no crash)
+localStorage, single JSON key 'todo-demo:tasks' for tasks; filter selection in a SEPARATE key 'todo-demo:filter' (switching filters never writes task data); on write failure keep the draft, show an accessible error (role="alert"), commit nothing; on read failure/corruption render the empty state (no crash)
 
 ## Look and feel
 

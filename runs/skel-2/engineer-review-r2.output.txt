@@ -1,0 +1,68 @@
+Good, Storybook is live. I have everything I need. Here is the review.
+
+---
+
+## ROUND-1 CONCERN VERIFICATION
+
+[1] BLOCKER — no acceptance criteria per feature
+RESOLVED. PRD now has an "Acceptance criteria (per feature)" section with concrete, testable criteria for all 5 features (add, list, complete, delete, filter). Each feature has 4-6 specific behavioral statements covering happy path, edge cases, and error states.
+
+[2] BLOCKER — persistence unspecified
+RESOLVED. PRD now has a "Persistence" section: localStorage, single JSON key `'todo-demo:tasks'`, write-failure behavior (keep draft + accessible error + no commit), read-failure/corruption behavior (empty state, no crash).
+
+[3] MAJOR — "daily tasks" ambiguity silently dropped
+RESOLVED. PRD "Assumptions & resolved ambiguities" section explicitly states: "'daily' is interpreted as 'an app used daily', NOT tasks with daily recurrence/reset. Daily reset, due dates, and recurrence are OUT of scope."
+
+[4] MAJOR — data model only in wireframe code, not PRD
+RESOLVED. PRD now has a "Data model" section: `Task { id: string (crypto.randomUUID), title: string (non-empty, trimmed), completed: boolean, createdAt: number (ms epoch, for newest-first ordering) }`.
+
+[5] MINOR — newest-first ordering only a code comment, no timestamp field
+RESOLVED. `createdAt: number (ms epoch)` is in the PRD data model. The wireframe `newestFirst` function uses it. PRD acceptance criteria state "newest-first by createdAt (stable for ties)".
+
+[6] MINOR — FilterView had no empty-filter-results message
+RESOLVED. Wireframe FilterView (lines 100-102) now has per-filter empty messages: "No active tasks — everything is done." / "No completed tasks yet." / "Nothing here yet — add your first task above." PRD AC also specifies "per-filter empty message".
+
+[7] MINOR — no composite story showing integration
+RESOLVED. Wireframes now include `FullApp` component (lines 130-176) wiring all features together. Stories file includes `export const Full: Story`. Storybook index.json confirms `to-do-wireframes--full` is registered.
+
+---
+
+## NEW GAPS FOUND
+
+**A) Filter persistence location unspecified (MINOR)**
+PRD AC says "selection persists across reload" for filter view, and "switching never writes task data." But the Persistence section only defines the `'todo-demo:tasks'` key. Where the filter state is stored is not stated. A builder would have to invent a storage key (e.g., `'todo-demo:filter'`) or embed it elsewhere. This is a product decision — specify it or at least note "separate localStorage key."
+
+**B) Wireframe FullApp uses `String(Date.now())` for ID; PRD says `crypto.randomUUID` (MINOR)**
+PRD data model: `id: string (crypto.randomUUID)`. Wireframe FullApp line 137: `{ id: String(Date.now()), ... }`. The wireframe is illustrative, but a builder seeing both could be confused about which is authoritative. The PRD wins, but worth noting.
+
+**C) FullApp composite empty message is generic, unlike FilterView's per-filter messages (NIT)**
+FilterView has per-filter empty messages. FullApp line 161 uses a flat "Nothing to show here." for all filters. The composite should match the feature-component behavior it claims to demonstrate.
+
+**D) No error/validation visual state in wireframe AddTask (NIT)**
+PRD AC says empty/whitespace rejected with "input keeps focus." The wireframe shows no feedback state for this rejection — no inline error text, no shake, no aria-live region. A builder needs to design this interaction.
+
+**E) "Accessible error" not specified (NIT)**
+PRD AC mentions "accessible error" for storage failures (complete task, delete task). No mechanism specified: `role="alert"`, live region, toast? Builder invents the UX.
+
+---
+
+## WHAT IS GOOD
+
+- Scope is tight and well-bounded. Explicit out-of-scope list prevents creep.
+- Data model is clean, each field has a stated purpose.
+- Acceptance criteria are testable and cover error paths (storage failure, corruption, invalid filter state).
+- Dark/light theme defined with contrast-safe hex values.
+- Wireframes demonstrate all features in isolation plus a composite.
+- Stack choice is pragmatic: React + Vite + TypeScript, Vitest + Testing Library.
+- Persistence failure modes are specified (keep draft, revert, show error).
+- Filter "switching never writes task data" is a good safety invariant.
+- Delivery pipeline mapped out (plan → review → code → review → gate → PR → merge).
+
+---
+
+## VERDICT: APPROVE with notes
+
+All 7 round-1 concerns are resolved. The remaining gaps (A through E) are minor — a competent engineer would handle them without guessing at product intent, though they should be addressed in the code-phase spec. Gap A (filter persistence key) is the only one that touches a product-decision boundary; the rest are implementation details.
+
+No blocker remains. An engineer can build this.
+engineer review r2 wall_s=87

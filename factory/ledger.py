@@ -26,6 +26,8 @@ EVENT_TYPES = frozenset({
     "review_detected", "finding_verified", "finding_dispositioned",
     "remediation_pushed", "gate_extended", "review_requested",
     "loop_converged",
+    # SKEL-2 intake events (docs/plans/skel-2-intake-spike)
+    "intake_approved",
 })
 
 REQUIRED_FIELDS = ("schema", "ts", "event")
