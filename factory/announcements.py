@@ -34,6 +34,66 @@ _MUTATION = re.compile(
 _ANNOUNCE_SETTER = re.compile(
     r"\bset(Announcement|Status|Message|LiveMessage|Notice)\s*\(\s*[^)\s]")
 
+# A flag that drives a CONDITIONAL assertive alert, e.g.
+#   role={rejected || storageFailed ? "alert" : undefined}
+# Any such flag left true after a successful mutation shows a stale error
+# (TOD-2/3/4 recurring class: the shared alert prioritizes the flag).
+_ALERT_FLAG_ROLE = re.compile(
+    r'role\s*=\s*\{\s*([^}]*?)\s*\?\s*["\']alert["\']')
+
+_HANDLER = re.compile(r"function\s+(handle\w+)\s*\([^)]*\)\s*\{")
+
+
+def _handler_bodies(text: str) -> list[tuple[str, str]]:
+    """(name, body) for each top-level handle* function, brace-balanced."""
+    out = []
+    for m in _HANDLER.finditer(text):
+        depth = 0
+        i = m.end() - 1  # at the opening brace
+        start = i
+        while i < len(text):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    out.append((m.group(1), text[start:i + 1]))
+                    break
+            i += 1
+    return out
+
+
+def _success_region(body: str) -> str:
+    """The handler body up to its failure branch (`} catch {`), or all of it.
+    Mutation handlers without try/catch are entirely success path."""
+    idx = body.find("} catch")
+    return body[:idx] if idx != -1 else body
+
+
+def check_stale_alert_flags(text: str, name: str) -> list[str]:
+    """Every flag gating a conditional assertive alert must be cleared on
+    every mutation handler's success path — else a successful mutation
+    leaves a stale error visible (and assertively announced)."""
+    flags: set[str] = set()
+    for m in _ALERT_FLAG_ROLE.finditer(text):
+        flags.update(re.findall(r"[A-Za-z_$][\w$]*", m.group(1)))
+    if not flags:
+        return []
+    failures = []
+    for hname, body in _handler_bodies(text):
+        if not _MUTATION.search(body):
+            continue
+        success = _success_region(body)
+        for flag in sorted(flags):
+            clear = re.compile(
+                r"\bset" + flag[0].upper() + re.escape(flag[1:]) + r"\s*\(\s*false\s*\)")
+            if not clear.search(success):
+                failures.append(
+                    f"{name}: {hname} mutates state but its success path never "
+                    f"clears '{flag}' — a stale assertive alert can survive a "
+                    f"successful mutation (stale-alert-flag class)")
+    return failures
+
 
 @dataclass
 class AnnouncementResult:
@@ -76,6 +136,10 @@ def check_file(path: Path) -> AnnouncementResult:
             f"{p.name}: has a live region but nothing feeds it on success "
             f"(no announcement setter call) — an empty live region announces "
             f"nothing")
+
+    # TOD-4 round-1 class (recurred across TOD-2/3/4): a flag gating the
+    # shared assertive alert must be cleared on every mutation success path.
+    failures.extend(check_stale_alert_flags(text, p.name))
 
     return AnnouncementResult(passed=not failures, failures=failures,
                               warnings=warnings)

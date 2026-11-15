@@ -98,3 +98,66 @@ def test_real_round5_prefix_is_flagged(tmp_path):
 def test_real_fixed_app_passes():
     r = check_file(REPO / "src" / "App.tsx")
     assert r.passed, r.named_failures()
+
+
+STALE_ALERT = '''
+export default function App() {
+  const [rejected, setRejected] = useState(false);
+  const [storageFailed, setStorageFailed] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  function handleDelete(id: string) {
+    try {
+      const result = deleteTask(id);
+      setTasks(result.tasks);
+      setStorageFailed(false);
+      setAnnouncement(`Deleted.`);
+    } catch {
+      setRejected(false);
+      setStorageFailed(true);
+    }
+  }
+  return (
+    <div>
+      <p role="status" aria-live="polite">{announcement}</p>
+      <p role={rejected || storageFailed ? "alert" : undefined}>{hint}</p>
+    </div>
+  );
+}
+'''
+
+
+def test_stale_alert_flag_on_success_is_flagged(tmp_path):
+    # TOD-4 round-1 class: the failure path clears `rejected` but the
+    # SUCCESS path does not — a stale assertive alert survives a delete.
+    p = tmp_path / "App.tsx"; p.write_text(STALE_ALERT)
+    r = check_file(p)
+    assert not r.passed
+    assert any("handleDelete" in f and "rejected" in f for f in r.failures)
+
+
+def test_stale_alert_flag_cleared_on_success_passes(tmp_path):
+    p = tmp_path / "App.tsx"
+    p.write_text(STALE_ALERT.replace(
+        "setStorageFailed(false);\n      setAnnouncement",
+        "setStorageFailed(false);\n      setRejected(false);\n      setAnnouncement"))
+    r = check_file(p)
+    assert r.passed, r.named_failures()
+
+
+def test_no_conditional_alert_no_flag_requirement(tmp_path):
+    # A component with only a polite region imposes no alert-flag duty.
+    p = tmp_path / "App.tsx"; p.write_text(FIXED)
+    assert check_file(p).passed
+
+
+@pytest.mark.skipif(not REPO.exists(), reason="product repo not cloned")
+def test_real_tod4_prefix_stale_alert_is_flagged(tmp_path):
+    old = subprocess.run(["git", "show", "3d558e8:src/App.tsx"], cwd=REPO,
+                         capture_output=True, text=True)
+    if old.returncode != 0:
+        pytest.skip("commit unavailable")
+    p = tmp_path / "App.tsx"; p.write_text(old.stdout)
+    r = check_file(p)
+    assert not r.passed, "the pre-fix TOD-4 App must be flagged"
+    assert any("handleDelete" in f for f in r.failures)
+    assert any("handleToggle" in f for f in r.failures)
