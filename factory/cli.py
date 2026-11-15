@@ -17,6 +17,7 @@ from .ledger import Ledger, LedgerError
 from . import gates, inbox, metrics
 from .dispatch import seal
 from .spec import check_story
+from .findings import FindingsLog
 from .adapters import hermes
 
 
@@ -94,6 +95,45 @@ def cmd_metrics(args) -> int:
            if args.control_ledger and Path(args.control_ledger).exists() else {})
     text = metrics.render_comparison(fac, ctl)
     if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(text)
+    return 0
+
+
+def cmd_log_finding(args) -> int:
+    """Record one reviewer finding (called by the review loop each round)."""
+    from .findings import Finding, classify
+    import time
+    log = FindingsLog(Path(args.log))
+    log.append(Finding(
+        ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        repo=args.repo, pr=args.pr, round=args.round, source=args.source,
+        klass=args.klass or classify(args.summary, verified=args.verified),
+        severity=args.severity, summary=args.summary, path=args.path,
+        head_sha=args.head_sha, escaped_gate=args.escaped_gate,
+        escaped_review=args.escaped_review, verified=args.verified,
+        disposition=args.disposition, fix_sha=args.fix_sha,
+        gate_check=args.gate_check))
+    print(f"logged: {args.summary[:70]}")
+    return 0
+
+
+def cmd_findings(args) -> int:
+    """Mine the review-findings log (Randy's idea, 2026-11-15)."""
+    log = FindingsLog(Path(args.log))
+    if args.recurring:
+        for k, n in log.recurring(args.min_count):
+            print(f"{n:3}  {k}")
+        return 0
+    if args.uncovered:
+        for k in log.uncovered_classes():
+            print(k)
+        return 0
+    text = log.render()
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(text, encoding="utf-8")
         print(f"wrote {args.out}")
     else:
@@ -185,6 +225,27 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--factory-ledger", default=str(_default_ledger()))
     m.add_argument("--control-ledger", default=None); m.add_argument("--out", default=None)
     m.set_defaults(fn=cmd_metrics)
+
+    lf = sub.add_parser("log-finding", help="record one reviewer finding")
+    lf.add_argument("--log", default="state/findings.jsonl")
+    lf.add_argument("--repo", required=True); lf.add_argument("--pr", type=int, required=True)
+    lf.add_argument("--round", type=int, required=True); lf.add_argument("--source", required=True)
+    lf.add_argument("--summary", required=True); lf.add_argument("--klass", default=None)
+    lf.add_argument("--severity", default="unknown"); lf.add_argument("--path", default=None)
+    lf.add_argument("--head-sha", default=None); lf.add_argument("--verified", default="unverified")
+    lf.add_argument("--disposition", default="open"); lf.add_argument("--fix-sha", default=None)
+    lf.add_argument("--gate-check", default=None)
+    lf.add_argument("--escaped-gate", action="store_true")
+    lf.add_argument("--escaped-review", action="store_true")
+    lf.set_defaults(fn=cmd_log_finding)
+
+    fl = sub.add_parser("findings", help="mine the review-findings log")
+    fl.add_argument("--log", default="state/findings.jsonl")
+    fl.add_argument("--recurring", action="store_true")
+    fl.add_argument("--uncovered", action="store_true")
+    fl.add_argument("--min-count", type=int, default=2)
+    fl.add_argument("--out", default=None)
+    fl.set_defaults(fn=cmd_findings)
 
     dp = sub.add_parser("dispatch")
     dp.add_argument("--ledger", default=str(_default_ledger()))
