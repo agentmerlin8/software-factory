@@ -287,6 +287,29 @@ overhead ratio" (non-coder tokens / coder tokens) as a headline metric;
 tier the pipeline by risk so small stories skip plan review and use one
 reviewer (ECN-1 / C1). Move seeded-defect reviewer calibration to P3
 (before routing starts), not P6 (ECN-3 / C3).
+
+### OC-16 verdict — GO (Randy, 2026-11-15)
+
+SKEL-1 ran both arms to completion (`runs/COMPARISON.md`). **Factory: 0
+escaped defects** (17 found and fixed in-loop; all 5 stories merged with
+Copilot approval). **Control: 6 escaped defects shipped to green tests**,
+including a data-loss BLOCKER (stale-snapshot overwrite in all 3 mutations,
+probe-verified) and a self-certifying concurrency test — the exact defect
+the factory caught and fixed in TOD-3's loop. Cost: **~3.8× tokens
+(9.96M vs 2.63M), ~4.7× dispatch wall-time**. human_min was NOT
+instrumented for either arm; the verdict rests on the measured defects axis.
+
+**Randy: "It's a go. The extra cost is worth the stability of code and
+visibility. Especially when we start building more complicated systems.
+I also believe we can tune the agents and new token optimizations will
+come along."**
+
+The kill criterion is satisfied on the defects axis at an owner-accepted
+cost multiple. The factory proceeds. Tuning directions Randy named:
+agent tuning + forthcoming token optimizations to shrink the ~3.8×
+multiple; the overhead ratio (0.94) and the 11-round TOD-1 calibration
+are the baseline to improve against. Next skeleton item: SKEL-2 (intake
+spike, highest product risk).
 ## Post-ratification amendments (2026-11-14, EXP-1/2/3)
 
 ### OC-14 amendment — public-earlier chosen (Randy, 2026-11-14)
