@@ -1,4 +1,4 @@
-# HANDOFF — SKEL-1 in flight (TOD-1/2/3/4 merged, TOD-5 awaiting human merge)
+# HANDOFF — SKEL-1 COMPLETE (both arms run; OC-16 go/no-go awaits owner)
 
 **Updated:** 2026-11-15 · supersedes the work-item table in `HANDOFF.md` §5.
 **Read `HANDOFF.md` first** for cold-start, decisions, board IDs, conventions.
@@ -6,18 +6,26 @@
 ## Where the experiment stands
 
 SKEL-1 (issue #3) = 5 to-do stories through the factory + a control arm.
-**Stories 1–4 of 5 are MERGED. Story 5 (the LAST) is CONVERGED — Copilot
-APPROVED at `11861ea`, PR #5, CI green, 0 unresolved threads, CLEAN.
-Waiting on Randy's merge (mode 1).** After that merge: the control arm
-and the kill-criterion comparison — the experiment's finish line.
+**BOTH ARMS ARE COMPLETE.** All 5 factory stories merged with Copilot
+approval (TOD-5 squash `0759dae`). The control arm (one session, same
+model/design/scaffold) built all 5 stories to green tests, then a post-hoc
+cross-family review found **6 escaped defects including a data-loss BLOCKER**.
+The OC-16 comparison is written: `runs/COMPARISON.md`.
 
-- Product repo: `agentmerlin8/factory-todo-demo` (public), main `7df778a`.
+**THE OPEN DECISION IS THE OWNER'S:** the factory wins decisively on escaped
+defects (0 vs 6) at a **~3.8× token / ~4.7× wall-time** multiple. human_min
+was NOT instrumented for either arm. Recommendation in COMPARISON.md is GO
+conditional on Randy accepting the cost multiple. Do not re-litigate the
+measured numbers; the call is the cost trade-off.
+
+- Product repo: `agentmerlin8/factory-todo-demo` (public), main `0759dae`.
   Local clone: `~/.hermes/cache/scratch/factory-exp/todo-demo`.
-- Run state: `runs/todo-demo/` (ledger.jsonl, design.md, stories/, dispatch/, evidence/).
-- Findings log: `state/findings.jsonl` + generated `state/FINDINGS.md`.
-- Control repo (not created yet): `agentmerlin8/factory-todo-control`.
+- Control repo: `agentmerlin8/factory-todo-control` (public), main `f7ac685`.
+  Local clone: `~/.hermes/cache/scratch/factory-exp/todo-control`.
+- Run state: `runs/todo-demo/` + `runs/todo-control/` (ledgers, evidence, dispatch).
+- Comparison: `runs/COMPARISON.md`. Findings log: `state/findings.jsonl`.
 
-## Story outcomes so far
+## Story outcomes (factory arm)
 
 | Story | Rounds | Merged | Notes |
 |---|---|---|---|
@@ -25,7 +33,17 @@ and the kill-criterion comparison — the experiment's finish line.
 | TOD-2 list | 2 | `1a29e3c` | OC-17 sizing held (166 lines, 0 CSS); cross-family EXECUTED claim refuted by execution |
 | TOD-3 toggle | 4 | `503e8c0` | storage-failure class dominated (6/10 findings); committed-snapshot contract born here |
 | TOD-4 delete | 4 | `7df778a` | 2/7 findings were defects in the prior round's own remediation |
-| TOD-5 filter | 3 | pending | round-2 finding was a defect introduced by the round-1 fix (pattern now 3x); harness fixed: contrast wash compositing + by-reference dispatch (128KiB argv cap) |
+| TOD-5 filter | 3 | `0759dae` | round-2 finding was a defect introduced by the round-1 fix (pattern 3x); harness fixed: contrast wash compositing + rule-level dark overrides + by-reference dispatch (128KiB argv cap) |
+
+## Control arm outcome
+
+One `hermes -z` session, 2.63M tokens, 1,115s, 77 tests green, build green.
+Post-hoc review verdict **FAIL**: stale-snapshot overwrite in all 3 mutations
+(concurrent cross-tab write clobbered — probe-verified 3/3 red), a
+self-certifying concurrency test, empty-title validation gap, misleading
+alert copy, dead code, latent state race. The BLOCKER is the exact defect
+the factory caught and fixed in TOD-3's loop. Gate on the control tree: 8/9
+(pr_size REAL over-budget: 503 product+visual lines, 153 CSS).
 
 ## TOD-1 outcome
 
@@ -76,30 +94,26 @@ Use `.venv/bin/python` (pytest lives there).
    → Auto-approval), UI-only, off by default, dismissed on new commits. Enabled
    on both repos. `requestReviewsByLogin` GraphQL is the re-request that registers.
 
-## Next action: merge TOD-5, then the CONTROL ARM
+## Next action: OWNER DECISION on OC-16, then close out SKEL-1
 
-**TOD-5 outcome (2026-11-15):** PR #5 converged in **3 rounds** (target <5).
-Round 1 (pre-PR, cross-family): announcements spoke full counts under a
-filter; filtered-empty conflated with truly-empty; pressed-state wash
-contrast backdrop-dependent. All fixed @5e691ba. Round 2 (Copilot): the
-round-1 filtered-count fix INTRODUCED a stale-live-region defect — under
-Completed, same-title adds never re-announced (visible count can't change).
-Fixed @11861ea with a monotonic addition sequence. **Third time a remediation
-round shipped its own defect — the control arm should be measured against
-this reality, not an idealized factory.**
-Harness fixes this story (both committed with tests): contrast audit
-composites translucent washes (was false-failing 0.00:1); adapter passes
->100KB packages by reference (Linux MAX_ARG_STRLEN = 128KiB per argument).
-**Randy merges PR #5 (squash). Then verify squash tree == approved head,
-record human_merged + story_done + run-level milestone.**
+Both arms are run and the comparison is written (`runs/COMPARISON.md`).
+The remaining step is Randy's go/no-go on the kill criterion:
 
-Then the CONTROL ARM (OC-16): same 5 stories, ONE `hermes -z` session,
-same model (qwen4-max-preview) + same design doc, in a fresh repo
-`agentmerlin8/factory-todo-control` from the same scaffold. Measure
-human-minutes, escaped defects, tokens/cost per story. Then
-`factory metrics --control-ledger …` → COMPARISON.md → go/no-go against
-the kill criterion: factory must win on human-minutes OR defects at an
-acceptable cost multiple, else STOP and reconsider.
+- Factory wins on **escaped defects: 0 vs 6** (control shipped a data-loss
+  BLOCKER + self-certifying test to green tests).
+- Cost: **~3.8× tokens, ~4.7× dispatch wall-time.** Acceptable? Owner's call.
+- **human_min was not instrumented** for either arm — the other kill axis is
+  unmeasured. If Randy wants a human-minutes comparison, that requires a
+  re-run with attention tracking; do not fabricate it.
+
+On GO: record the decision (DEC-### in docs/open-calls.md or a decision
+event), mark issue #3 Done, move the board Stage to Done, and proceed to the
+next skeleton item (SKEL-2 intake spike is the highest product risk). On
+NO-GO: STOP per OC-16 and reconsider the factory design — the comparison
+file is the evidence base.
+
+**Do not re-run the arms or re-litigate the measured numbers without an
+explicit owner request.** The experiment is complete; the decision is open.
 
 ## Board
 
