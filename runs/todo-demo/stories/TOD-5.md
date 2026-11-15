@@ -17,6 +17,9 @@
 
 ## Design slice
 - Filter state via `loadFilter`/`saveFilter` in the store seam.
+- CARRY-FORWARD (TOD-2 review N3, deferred): `loadFilter` currently has no
+  try/catch — a throwing `localStorage.getItem` crashes. Wrap it as part of
+  AC5; add a named test that forces getItem to throw.
 - Filtering is a pure function (testable) over tasks + filter.
 - The count now reflects the filtered set (changes TOD-2's total count).
 - TDD: tests first, verify red, implement green.
