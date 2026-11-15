@@ -45,6 +45,7 @@ CLASSES = {
     "test-gap": "Named test does not assert the acceptance criterion",
     "false-positive": "Reviewer claim refuted by execution (not a real defect)",
     "state-integrity": "Duplicate/racy mutation corrupts state",
+    "concurrency-lost-update": "Interleaved read-modify-write drops a committed record",
     "scope-creep": "Unrequested work shipped without its own ACs",
     "other": "Unclassified — add a class when a pattern recurs",
 }
@@ -63,6 +64,8 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("unhandled-io-failure", re.compile(r"storage.{0,30}(fail|full|quota|block)|throws?|uncaught|"
                                         r"persistence.{0,20}fail", re.I)),
     ("test-gap", re.compile(r"test.{0,40}(does not|doesn't|missing|never assert)|regression test", re.I)),
+    ("concurrency-lost-update", re.compile(r"concurren\w*|interleav|lost update|"
+                                           r"cross.?tab|clobber|race condition", re.I)),
     ("state-integrity", re.compile(r"duplicate|double.?submit|race|idempot", re.I)),
     ("scope-creep", re.compile(r"unrelated|not required by|exceeds the.{0,20}brief|out of scope", re.I)),
 ]
