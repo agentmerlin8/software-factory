@@ -1,0 +1,82 @@
+name: controller-writer
+
+# SKEL-3 SEC-2 (OC-14): the SOLE state-repo writer.
+# Runs NO model output and NO product code — pure validation + append.
+# One concurrency group serializes all appends (fixes MRG-1 push contention).
+# The controller App key (CONTROLLER_PEM) lives ONLY here, never in a
+# model/product-code job.
+
+on:
+  repository_dispatch:
+    types: [ledger-submission]
+  workflow_dispatch:
+    inputs:
+      submission_url:
+        description: "URL of the submission JSON (product-repo raw/artifact)"
+        required: true
+
+concurrency:
+  group: controller-writer
+  cancel-in-progress: false   # queue, never cancel — every submission lands
+
+permissions:
+  contents: read              # GITHUB_TOKEN is read-only; writes use the App token
+
+jobs:
+  validate-and-append:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint controller token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CONTROLLER_APP_ID }}
+          private-key: ${{ secrets.CONTROLLER_PEM }}
+
+      - name: Checkout state repo (controller identity)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch submission
+        env:
+          SUBMISSION_URL: ${{ github.event.client_payload.submission_url || inputs.submission_url }}
+        run: |
+          curl -fsSL "$SUBMISSION_URL" -o /tmp/submission.json
+          echo "submission bytes: $(wc -c < /tmp/submission.json)"
+
+      - name: Validate + append (fail-closed)
+        run: |
+          python -m factory controller \
+            --ledger runs/todo-demo/ledger.jsonl \
+            --submission /tmp/submission.json \
+            --policy controller-policy.json
+
+      - name: Commit + push (serialized by concurrency group)
+        run: |
+          git config user.name "factory-controller[bot]"
+          git config user.email "factory-controller[bot]@users.noreply.github.com"
+          git add runs/todo-demo/ledger.jsonl
+          if git diff --cached --quiet; then
+            echo "no change to commit"
+            exit 0
+          fi
+          git commit -m "controller: append validated submission"
+          # Retry push on non-fast-forward (another writer landed first).
+          # The concurrency group serializes THIS workflow, but a manual
+          # push could interleave; rebase + retry keeps the chain intact.
+          for i in 1 2 3 4 5; do
+            if git push; then
+              echo "pushed on attempt $i"
+              exit 0
+            fi
+            git pull --rebase
+          done
+          echo "push failed after 5 attempts" >&2
+          exit 1
