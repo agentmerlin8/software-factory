@@ -60,7 +60,8 @@ def test_pre_review_aggregates(repo):
         res = gates.pre_review(repo, base="HEAD~1", manifest=["a.txt"])
     assert res.passed
     assert res.checks == {"build": True, "tests": True,
-                          "manifest": True, "secrets": True}
+                          "manifest": True, "secrets": True,
+                          "boundaries": True}
 
 
 def test_pre_review_fails_closed(repo):
