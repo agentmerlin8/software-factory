@@ -15,7 +15,10 @@
 - src/store.test.ts
 - src/App.tsx
 - src/App.test.tsx
-- src/index.css
+
+Note: `src/index.css` is intentionally EXCLUDED (OC-17 sizing, 2026-11-15).
+The theme already exists; reuse its classes. Do NOT restyle, add theme
+variants, or write new CSS — unrequested visual work is out of scope.
 
 ## Design slice
 - Read tasks via the store seam (`loadTasks`), never localStorage directly.
