@@ -119,3 +119,35 @@ def test_finding_str_is_actionable():
     f = audit(BAD_CSS, CHECKS)[0]
     text = str(f)
     assert ":1" in text and "needs 4.5:1" in text and f.label in text
+
+
+# --- TOD-5 false-failure class: translucent wash backgrounds ---
+WASH_CSS = BAD_CSS + """
+:root {
+  --persimmon-wash: rgba(217, 79, 4, 0.09);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --persimmon-wash: rgba(255, 122, 47, 0.12);
+  }
+}
+"""
+
+
+def test_translucent_wash_background_is_composited_not_zero():
+    # The pressed filter button: deep persimmon text on a 9%-alpha wash.
+    # Old gate resolved the rgba to None and reported 0.00:1 (false fail);
+    # composited over the real backdrop it passes AA in both themes.
+    checks = [ContrastCheck('pressed[aria-pressed="true"]',
+                            "var(--persimmon-deep)", "var(--persimmon-wash)")]
+    findings = audit(WASH_CSS, checks)
+    assert findings == [], [str(f) for f in findings]
+
+
+def test_translucent_wash_still_fails_when_text_is_weak():
+    # Fail-closed direction: faint text on the same wash must still fail.
+    checks = [ContrastCheck("weak-on-wash",
+                            "var(--ink-faint)", "var(--persimmon-wash)")]
+    findings = audit(WASH_CSS, checks)
+    assert len(findings) == 2  # both themes
+    assert all(0.0 < f.ratio < 4.5 for f in findings)

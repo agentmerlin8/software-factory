@@ -219,24 +219,34 @@ def audit(css: str, checks: list[ContrastCheck]) -> list[ContrastFinding]:
     """Return every failing pairing across light and dark themes.
 
     Unresolvable colors are reported as failures (fail-closed): a token we
-    cannot resolve is a token we cannot certify.
+    cannot resolve is a token we cannot certify. Translucent backgrounds
+    (rgba washes) are alpha-composited over the page backdrop per theme —
+    resolving them to None and reporting 0.00:1 was a false-failure class
+    (TOD-5: the pressed filter button's 9%-alpha wash actually passes AA).
     """
+    from .css_audit import _root_background
+    page_bg = _root_background(css)
     findings: list[ContrastFinding] = []
     for dark in (False, True):
         variables = theme_variables(css, dark=dark)
         theme = "dark" if dark else "light"
+        backdrop = _resolve_rgba(page_bg, variables) or (255, 255, 255, 1.0)
+        backdrop_rgb = composite(backdrop, (255, 255, 255))
         for chk in checks:
-            fg = resolve_color(chk.fg, variables)
-            bg = resolve_color(chk.bg, variables)
+            fg = _resolve_rgba(chk.fg, variables)
+            bg = _resolve_rgba(chk.bg, variables)
             if not fg or not bg:
                 findings.append(ContrastFinding(
                     theme=theme, label=chk.label, fg=chk.fg, bg=chk.bg,
                     ratio=0.0, threshold=chk.threshold))
                 continue
-            r = contrast_ratio(fg, bg)
+            bg_rgb = composite(bg, backdrop_rgb)
+            fg_rgb = composite(fg, bg_rgb)
+            r = ratio_rgb(fg_rgb, bg_rgb)
             if r < chk.threshold:
                 findings.append(ContrastFinding(
-                    theme=theme, label=chk.label, fg=fg, bg=bg,
+                    theme=theme, label=chk.label,
+                    fg=f"rgb{fg_rgb}", bg=f"rgb{bg_rgb}",
                     ratio=r, threshold=chk.threshold))
     return findings
 
