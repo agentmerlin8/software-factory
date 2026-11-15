@@ -1,31 +1,31 @@
-# HANDOFF — SKEL-1 DONE (OC-16 verdict: GO; next is SKEL-2)
+# HANDOFF — SKEL-1 + SKEL-2 DONE (next is SKEL-3)
 
 **Updated:** 2026-11-15 · supersedes the work-item table in `HANDOFF.md` §5.
 **Read `HANDOFF.md` first** for cold-start, decisions, board IDs, conventions.
 
 ## Where the experiment stands
 
-SKEL-1 (issue #3) is **COMPLETE and CLOSED. OC-16 verdict: GO** (Randy,
-2026-11-15). Both arms ran to completion; the factory wins on escaped
-defects (0 vs 6, incl. a data-loss BLOCKER in the control) at a ~3.8× token
-/ ~4.7× wall-time multiple the owner accepted. Issue #3 closed; board
-Status=Done, Stage=Done. Decision + rationale in `docs/open-calls.md`
-(OC-16 verdict) and the factory ledger (`run_completed`).
+- **SKEL-1 (issue #3) DONE — OC-16 GO.** Factory 0 escaped defects vs
+  control 6 (incl. data-loss BLOCKER) at ~3.8× tokens; cost accepted.
+- **SKEL-2 (issue #4) DONE — hypothesis 2 HOLDS (caveat).** Intake CLI +
+  intake-agent role + Storybook wireframes built. Independent engineer
+  persona: round 1 REQUEST-CHANGES (2 blockers: no ACs, no persistence) →
+  made acceptance/persistence/data_model REQUIRED categories → round 2
+  APPROVE, all 7 concerns resolved. 2 rounds, 226s review time.
+  **Caveat:** agent persona, not a human engineer — measures artifact
+  clarity, not human acceptance; a real non-owner test is the follow-up.
+  Evidence: `docs/experiments/skel-2-intake-2026-11-15.md`, `runs/skel-2/`.
 
-**Randy's rationale (verbatim):** "It's a go. The extra cost is worth the
-stability of code and visibility. Especially when we start building more
-complicated systems. I also believe we can tune the agents and new token
-optimizations will come along."
-
-**NEXT WORK: SKEL-2 (issue #4) — intake spike, the highest product risk.**
-The walking skeleton proved the loop; intake (description → PRD an engineer
-approves) is the next unproven hypothesis. Do not re-run SKEL-1's arms.
+**NEXT WORK: SKEL-3 (issue #5) — controller-writer security (OC-14).**
+Agents never hold a state-repo write token; a separate controller job (no
+model output, no product code) validates + appends; two identities (agent
+App / controller App); single controller writer serialized by one
+concurrency group. Works on Free plan. Read issue #5 + OC-14 before scoping.
 
 - Product repo: `agentmerlin8/factory-todo-demo` (public), main `0759dae`.
-  Local clone: `~/.hermes/cache/scratch/factory-exp/todo-demo`.
 - Control repo: `agentmerlin8/factory-todo-control` (public), main `f7ac685`.
-  Local clone: `~/.hermes/cache/scratch/factory-exp/todo-control`.
-- Run state: `runs/todo-demo/` + `runs/todo-control/` (ledgers, evidence, dispatch).
+- Intake artifacts: `factory/intake.py`, `process/intake-agent.md`,
+  `templates/wireframes/`, `runs/skel-2/`.
 - Comparison: `runs/COMPARISON.md`. Findings log: `state/findings.jsonl`.
 
 ## Story outcomes (factory arm)
@@ -97,16 +97,22 @@ Use `.venv/bin/python` (pytest lives there).
    → Auto-approval), UI-only, off by default, dismissed on new commits. Enabled
    on both repos. `requestReviewsByLogin` GraphQL is the re-request that registers.
 
-## Next action: SKEL-2 (intake spike)
+## Next action: SKEL-3 (controller-writer security)
 
-SKEL-1 is closed (GO). The decision is recorded — do not re-open it or
-re-run the arms without an explicit owner request. The next skeleton item
-is **SKEL-2 (issue #4): the intake spike**, the highest product risk. The
-walking skeleton proved the build/review/merge loop; intake (plain
-description → a PRD an engineer approves) is the next unproven hypothesis
-(OC-12 pulled it forward). Read issue #4 and `docs/vision.md` §11 before
-scoping. Follow the same discipline: fresh run chat, repo is the state,
-slice law (OC-17 sizing), Copilot approval + human merge.
+SKEL-1 (GO) and SKEL-2 (intake, hypothesis 2 holds) are closed. Do not
+re-open them or re-run their arms without an explicit owner request. The
+next skeleton item is **SKEL-3 (issue #5): controller-writer security
+(OC-14)** — agents never hold a state-repo write token; a separate
+controller job (no model output, no product code) validates + appends; two
+identities (agent App / controller App); single controller writer
+serialized by one concurrency group (fixes ledger contention, MRG-1).
+Works on the Free plan. Read issue #5 + OC-14 + the github-apps skill
+before scoping. Same discipline: fresh run chat, repo is the state, slice
+law (OC-17 sizing), Copilot approval + human merge.
+
+**SKEL-2 follow-up (when a human is available):** a real non-owner engineer
+test of the intake PRD — the agent-persona approval is the weaker evidence
+(Randy's decision); the human test is the stronger signal.
 
 **Tuning backlog Randy named (shrink the ~3.8× multiple):** agent tuning +
 forthcoming token optimizations. The overhead ratio (0.94) and the 11-round
@@ -116,6 +122,6 @@ defect" pattern (3×) are the concrete prevention targets.
 
 ## Board
 
-Issue #3 Done (Status=Done, Stage=Done). Issues #8/#9 (EXP-1/2) Done.
-Issues #4/#5/#6/#7 (SKEL-2/3/4/5) Backlog. Board IDs and the `printf -v`
-GraphQL pattern are in `HANDOFF.md` §6.
+Issues #3 (SKEL-1) and #4 (SKEL-2) Done (Status=Done, Stage=Done).
+Issues #8/#9 (EXP-1/2) Done. Issues #5/#6/#7 (SKEL-3/4/5) Backlog.
+Board IDs and the `printf -v` GraphQL pattern are in `HANDOFF.md` §6.
