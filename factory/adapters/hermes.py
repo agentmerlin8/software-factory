@@ -18,7 +18,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Linux ARG_MAX is ~2MB per argument; refuse oversized packages loudly.
+# Linux MAX_ARG_STRLEN is 128KiB PER ARGUMENT (not the ~2MB ARG_MAX total).
+# A 151KB reviewer package died with E2BIG at spawn (TOD-5). Packages above
+# the safe inline limit are passed BY REFERENCE: the argv prompt instructs
+# the agent to read the sealed package file first. The package on disk stays
+# the canonical, content-addressed artifact either way.
+MAX_INLINE_BYTES = 100_000
 MAX_PACKAGE_BYTES = 1_500_000
 
 
@@ -83,7 +88,18 @@ def run(package_path: Path, *, model: str, workdir: Path,
             "split the dispatch")
     usage_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = build_command(text, model, workdir, usage_path, toolsets)
+    if len(text.encode("utf-8")) > MAX_INLINE_BYTES:
+        # By-reference dispatch: argv carries a compact pointer, the agent
+        # reads the full sealed package from disk (it has file tools).
+        prompt = (
+            "Your complete dispatch package is the file "
+            f"{package_path.resolve()} — read it FIRST, in full, and follow "
+            "it exactly: role instruction, pinned inputs, scope contract, "
+            "manifest, stop rules, resume preamble. The pinned inputs are "
+            "also embedded in that file; do not skip any section. Begin now.")
+    else:
+        prompt = text
+    cmd = build_command(prompt, model, workdir, usage_path, toolsets)
     start = time.monotonic()
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,

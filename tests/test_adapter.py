@@ -74,3 +74,31 @@ def test_missing_usage_file_is_empty(tmp_path):
                   usage_path=tmp_path / "absent.json")
     assert res.usage == {}
     assert res.tokens == {"in": 0, "out": 0}
+
+
+def test_large_package_dispatched_by_reference(tmp_path):
+    # TOD-5: a 151KB package died with E2BIG — Linux caps a SINGLE argument
+    # at 128KiB. Above the inline limit, argv must carry a compact pointer
+    # to the sealed package, not the package itself.
+    pkg = tmp_path / "big.md"
+    pkg.write_text("x" * (hermes.MAX_INLINE_BYTES + 1))
+    fake = mock.Mock(returncode=0, stdout="done", stderr="")
+    with mock.patch.object(hermes.subprocess, "run", return_value=fake) as m:
+        res = run(pkg, model="m", workdir=tmp_path,
+                  usage_path=tmp_path / "u.json")
+    assert res.ok
+    args = m.call_args[0][0]
+    prompt = args[args.index("-z") + 1]
+    assert len(prompt.encode("utf-8")) < hermes.MAX_INLINE_BYTES
+    assert str(pkg.resolve()) in prompt
+    assert "read it FIRST" in prompt
+
+
+def test_small_package_still_inline(tmp_path):
+    pkg = tmp_path / "pkg.md"
+    pkg.write_text("do the thing")
+    fake = mock.Mock(returncode=0, stdout="", stderr="")
+    with mock.patch.object(hermes.subprocess, "run", return_value=fake) as m:
+        run(pkg, model="m", workdir=tmp_path, usage_path=tmp_path / "u.json")
+    args = m.call_args[0][0]
+    assert args[args.index("-z") + 1] == "do the thing"
