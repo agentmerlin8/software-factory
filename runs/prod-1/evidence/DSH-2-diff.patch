@@ -1,0 +1,740 @@
+diff --git a/src/data/api.test.ts b/src/data/api.test.ts
+new file mode 100644
+index 0000000..5e53818
+--- /dev/null
++++ b/src/data/api.test.ts
+@@ -0,0 +1,103 @@
++// DSH-2 api tests — fetch + parse into {rows} | {error}, never throw.
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { fetchFindings, fetchLedger, fetchRuns } from './api';
++import { findings } from './fixtures';
++
++function jsonResponse(body: unknown): Response {
++  return new Response(JSON.stringify(body), {
++    status: 200, headers: { 'Content-Type': 'application/json' },
++  });
++}
++
++afterEach(() => {
++  vi.unstubAllGlobals();
++});
++
++describe('fetchRuns', () => {
++  it('parses the run-id list', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(['demo-run', 'control-run'])));
++    expect(await fetchRuns()).toEqual({ rows: ['demo-run', 'control-run'] });
++  });
++
++  it('surfaces a per-source {error} response as a typed error, no throw', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () =>
++      jsonResponse({ error: 'runs: [Errno 13] Permission denied' })));
++    expect(await fetchRuns()).toEqual({ error: 'runs: [Errno 13] Permission denied' });
++  });
++
++  it('rejects a non-array payload as a typed error, never fabricated rows', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ nope: true })));
++    const res = await fetchRuns();
++    expect(res).toHaveProperty('error');
++    expect(res).not.toHaveProperty('rows');
++  });
++});
++
++describe('fetchLedger', () => {
++  it('requests the run and parses rows', async () => {
++    const fetchMock = vi.fn(async () => jsonResponse([{ event: 'run_started', schema: 0 }]));
++    vi.stubGlobal('fetch', fetchMock);
++    const res = await fetchLedger('demo-run');
++    expect(fetchMock).toHaveBeenCalledWith('/api/ledger?run=demo-run');
++    expect(res).toEqual({ rows: [{ event: 'run_started', schema: 0 }] });
++  });
++
++  it('encodes the run id in the query string', async () => {
++    const fetchMock = vi.fn(async () => jsonResponse([]));
++    vi.stubGlobal('fetch', fetchMock);
++    await fetchLedger('a b&c');
++    expect(fetchMock).toHaveBeenCalledWith('/api/ledger?run=a%20b%26c');
++  });
++
++  it('surfaces a per-source {error} response as a typed error, no throw', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () =>
++      jsonResponse({ error: 'runs/demo-run/ledger.jsonl: invalid JSON at line 3' })));
++    expect(await fetchLedger('demo-run')).toEqual({
++      error: 'runs/demo-run/ledger.jsonl: invalid JSON at line 3',
++    });
++  });
++
++  it('turns a network failure into a typed error, no throw', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
++    const res = await fetchLedger('demo-run');
++    expect(res).toHaveProperty('error');
++    expect(String(res)).not.toBe('[object Promise]');
++  });
++
++  it('turns an HTTP error status into a typed error', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })));
++    const res = await fetchLedger('demo-run');
++    expect(res).toHaveProperty('error');
++  });
++
++  it('turns malformed JSON into a typed error, no throw', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => new Response('{broken', { status: 200 })));
++    const res = await fetchLedger('demo-run');
++    expect(res).toHaveProperty('error');
++  });
++
++  it('rejects non-array payloads as typed errors', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse('just a string')));
++    expect(await fetchLedger('demo-run')).toHaveProperty('error');
++  });
++});
++
++describe('fetchFindings', () => {
++  it('parses findings rows', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(findings)));
++    expect(await fetchFindings()).toEqual({ rows: findings });
++  });
++
++  it('surfaces a per-source {error} response as a typed error, no throw', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () =>
++      jsonResponse({ error: 'state/findings.jsonl: invalid JSON at line 9' })));
++    expect(await fetchFindings()).toEqual({
++      error: 'state/findings.jsonl: invalid JSON at line 9',
++    });
++  });
++
++  it('empty findings list is valid rows, not an error', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([])));
++    expect(await fetchFindings()).toEqual({ rows: [] });
++  });
++});
+diff --git a/src/data/api.ts b/src/data/api.ts
+new file mode 100644
+index 0000000..5c93072
+--- /dev/null
++++ b/src/data/api.ts
+@@ -0,0 +1,62 @@
++// DSH-2 API client — typed fetch/parse of the three read-only endpoints.
++// Every failure mode (network, HTTP status, malformed JSON, per-source
++// {error} payload, wrong shape) becomes a typed {error} result; these
++// functions never throw and never fabricate rows.
++import type { FindingRow, LedgerRow } from './types';
++
++export type ApiResult<T> = { rows: T } | { error: string };
++
++async function getJson(url: string): Promise<ApiResult<unknown>> {
++  let response: Response;
++  try {
++    response = await fetch(url);
++  } catch (err) {
++    return { error: url + ': ' + (err instanceof Error ? err.message : String(err)) };
++  }
++  if (!response.ok) {
++    return { error: url + ': HTTP ' + response.status };
++  }
++  let body: unknown;
++  try {
++    body = await response.json();
++  } catch (err) {
++    return { error: url + ': invalid JSON: ' + (err instanceof Error ? err.message : String(err)) };
++  }
++  // Per-source error payload from the data server: 200 {"error": "<file>: <reason>"}.
++  if (body !== null && typeof body === 'object' && !Array.isArray(body)
++    && typeof (body as { error?: unknown }).error === 'string') {
++    return { error: (body as { error: string }).error };
++  }
++  return { rows: body };
++}
++
++function asArray<T>(result: ApiResult<unknown>, url: string, guard: (v: unknown) => v is T): ApiResult<T[]> {
++  if ('error' in result) return result;
++  const rows = result.rows;
++  if (!Array.isArray(rows) || !rows.every(guard)) {
++    return { error: url + ': unexpected payload shape (expected an array of rows)' };
++  }
++  return { rows: rows as T[] };
++}
++
++const isString = (v: unknown): v is string => typeof v === 'string';
++const isRecord = (v: unknown): v is Record<string, unknown> =>
++  v !== null && typeof v === 'object' && !Array.isArray(v);
++const isLedgerRow = (v: unknown): v is LedgerRow => isRecord(v) && typeof v.event === 'string';
++const isFindingRow = (v: unknown): v is FindingRow =>
++  isRecord(v) && typeof v.repo === 'string' && typeof v.pr === 'number' && typeof v.round === 'number';
++
++export async function fetchRuns(): Promise<ApiResult<string[]>> {
++  const url = '/api/runs';
++  return asArray(await getJson(url), url, isString);
++}
++
++export async function fetchLedger(run: string): Promise<ApiResult<LedgerRow[]>> {
++  const url = '/api/ledger?run=' + encodeURIComponent(run);
++  return asArray(await getJson(url), url, isLedgerRow);
++}
++
++export async function fetchFindings(): Promise<ApiResult<FindingRow[]>> {
++  const url = '/api/findings';
++  return asArray(await getJson(url), url, isFindingRow);
++}
+diff --git a/src/data/fixtures.ts b/src/data/fixtures.ts
+new file mode 100644
+index 0000000..8da6e56
+--- /dev/null
++++ b/src/data/fixtures.ts
+@@ -0,0 +1,101 @@
++// DSH-2 fixtures — mirror the real schema-0 ledger/findings shapes
++// (factory/ledger.py, state/findings.jsonl). Includes every case the story
++// named: correction re-attribution, false-positive / rejected / RESOLVED
++// findings, a control-arm run, coder_tokens==0, and missing human_min.
++import type { FindingRow, LedgerRow, RunLedger } from './types';
++
++const DEMO = 'demo/factory';
++const CTRL = 'demo/control';
++
++function ledger(partial: Partial<LedgerRow> & Pick<LedgerRow, 'event'>): LedgerRow {
++  return {
++    schema: 0, ts: '2026-11-15T00:00:00Z', story: null, role: null, repo: null,
++    sha: null, model: null, tokens: null, cost_usd: null, wall_s: null,
++    human_min: null, outcome: null, detail: {}, prev: null, ...partial,
++  };
++}
++
++function finding(partial: Partial<FindingRow>): FindingRow {
++  return {
++    ts: '2026-11-15T00:00:00Z', repo: DEMO, pr: 1, round: 1, source: 'copilot',
++    klass: 'logic-error', severity: 'major', summary: 'a real defect',
++    path: null, head_sha: null, escaped_gate: false, escaped_review: false,
++    verified: null, disposition: 'fixed', fix_sha: null, gate_check: null,
++    ...partial,
++  };
++}
++
++// --- factory run: three stories -------------------------------------------
++const factoryRows: LedgerRow[] = [
++  ledger({ event: 'run_started', role: 'controller', detail: { run: 'demo-run' } }),
++  // STY-A: coder dispatch + reviewer dispatch + correction re-attribution.
++  ledger({ event: 'dispatch_sealed', story: 'STY-A', role: 'coder', repo: DEMO }),
++  ledger({
++    event: 'dispatch_completed', story: 'STY-A', role: 'coder', model: 'coder-model',
++    tokens: { in: 100, out: 50 }, wall_s: 120, human_min: 2, outcome: 'ok',
++  }),
++  ledger({
++    event: 'dispatch_completed', story: 'STY-A', role: 'reviewer', model: 'review-model',
++    tokens: { in: 60, out: 15 }, wall_s: 60, outcome: 'ok',
++  }),
++  // usage-path-bug recovery: tokens re-attributed to controller (non-coder).
++  ledger({
++    event: 'correction', story: 'STY-A', role: 'controller',
++    detail: { tokens: { in: 200, out: 25 }, cost_usd: 0, reason: 'usage path recovered' },
++  }),
++  // zero-token correction must not change totals.
++  ledger({ event: 'correction', story: 'STY-A', role: 'coder', detail: { tokens: { in: 0, out: 0 } } }),
++  ledger({ event: 'human_merged', story: 'STY-A', role: 'human', human_min: 3 }),
++  // in-loop finding: counts in defect_found, NOT in escaped defects.
++  ledger({ event: 'defect_found', story: 'STY-A', role: 'reviewer', detail: { klass: 'logic-error' } }),
++  ledger({ event: 'pr_opened', story: 'STY-A', repo: DEMO, detail: { pr: 1, pre_pr_rounds: 1 } }),
++  ledger({ event: 'loop_converged', story: 'STY-A', repo: DEMO, detail: { pr: 1, rounds: 9 } }),
++  // STY-B: reviewer-only -> coder_tokens == 0 -> overhead null. No human_min.
++  ledger({ event: 'dispatch_sealed', story: 'STY-B', role: 'reviewer', repo: DEMO }),
++  ledger({
++    event: 'dispatch_completed', story: 'STY-B', role: 'reviewer', model: 'review-model',
++    tokens: { in: 90, out: 10 }, wall_s: 30, outcome: 'ok',
++  }),
++  ledger({ event: 'pr_opened', story: 'STY-B', repo: DEMO, detail: { pr: 2 } }),
++  // no findings rows for pr 2 -> rounds fall back to loop_converged.
++  ledger({ event: 'loop_converged', story: 'STY-B', repo: DEMO, detail: { pr: 2, rounds: 4 } }),
++  // STY-C: missing human_min AND missing wall_s -> null, never 0.
++  ledger({ event: 'dispatch_sealed', story: 'STY-C', role: 'coder', repo: DEMO }),
++  ledger({
++    event: 'dispatch_completed', story: 'STY-C', role: 'coder', model: 'coder-model',
++    tokens: { in: 10, out: 5 }, outcome: 'ok',
++  }),
++  ledger({ event: 'story_done', story: 'STY-C' }),
++];
++
++// --- control run: single-pass arm, excluded from mean rounds --------------
++const controlRows: LedgerRow[] = [
++  ledger({ event: 'run_started', role: 'controller', detail: { arm: 'control' } }),
++  ledger({ event: 'dispatch_sealed', story: 'CTL-1', role: 'coder', repo: CTRL }),
++  ledger({
++    event: 'dispatch_completed', story: 'CTL-1', role: 'coder', model: 'coder-model',
++    tokens: { in: 900, out: 100 }, wall_s: 500, outcome: 'ok',
++  }),
++  // control has no review loop; a rounds value here must NOT enter the mean.
++  ledger({ event: 'loop_converged', story: 'CTL-1', repo: CTRL, detail: { rounds: 10 } }),
++];
++
++export const factoryRun: RunLedger = { run: 'demo-run', rows: factoryRows };
++export const controlRun: RunLedger = { run: 'control-run', rows: controlRows };
++export const allRuns: RunLedger[] = [factoryRun, controlRun];
++
++export const findings: FindingRow[] = [
++  // STY-A pr 1: pre-PR cross-family round 1 + copilot round 2.
++  finding({ source: 'cross-family', round: 1, escaped_gate: true, escaped_review: true }),
++  finding({ round: 2, escaped_gate: true, escaped_review: true }),
++  // exclusions: false-positive class, rejected disposition, RESOLVED marker.
++  finding({ round: 2, klass: 'false-positive', escaped_gate: true, escaped_review: true }),
++  finding({ round: 2, disposition: 'rejected', escaped_gate: true, escaped_review: true }),
++  finding({ round: 2, summary: 'RESOLVED: marker record, not a defect', escaped_gate: true }),
++  // not escaped at all -> excluded.
++  finding({ round: 2, summary: 'caught in-loop, never escaped' }),
++  // control repo: one genuine escape (post-hoc review, pr 0).
++  finding({ repo: CTRL, pr: 0, round: 1, source: 'cross-family', escaped_gate: true, escaped_review: true }),
++];
++
++export const REPOS = { demo: DEMO, control: CTRL };
+diff --git a/src/data/format.ts b/src/data/format.ts
+new file mode 100644
+index 0000000..9a2d5b1
+--- /dev/null
++++ b/src/data/format.ts
+@@ -0,0 +1,8 @@
++// DSH-2 formatting — null renders 'not recorded', never 0 (a missing
++// measurement is not a zero measurement). Mirrors metrics.py _fmt.
++
++export function fmt(value: number | null | undefined): string {
++  if (value === null || value === undefined) return 'not recorded';
++  if (Number.isInteger(value)) return String(value);
++  return value.toFixed(2);
++}
+diff --git a/src/data/metrics.test.ts b/src/data/metrics.test.ts
+new file mode 100644
+index 0000000..c0781e8
+--- /dev/null
++++ b/src/data/metrics.test.ts
+@@ -0,0 +1,165 @@
++// DSH-2 metric tests — pure functions over fixture ledger/findings rows.
++import { describe, it, expect } from 'vitest';
++import {
++  ALL, escapedDefectsByRepo, harvestStories, headlineOverhead, isEscapedDefect,
++  meanReviewRounds, selectByRepo, selectRuns, storiesInScope,
++} from './metrics';
++import { fmt } from './format';
++import { allRuns, controlRun, factoryRun, findings, REPOS } from './fixtures';
++import type { StoryMetrics } from './types';
++
++const stories = harvestStories(allRuns, findings);
++const byStory = (id: string): StoryMetrics => {
++  const s = stories.find((x) => x.story === id);
++  if (!s) throw new Error(`fixture story missing: ${id}`);
++  return s;
++};
++
++describe('escaped-defect formula', () => {
++  it('excludes false-positive, rejected, and RESOLVED-marker findings', () => {
++    const counts = escapedDefectsByRepo(findings);
++    // demo repo: 2 genuine escapes; fp/rejected/RESOLVED/non-escaped excluded.
++    expect(counts[REPOS.demo]).toBe(2);
++    expect(counts[REPOS.control]).toBe(1);
++  });
++
++  it('predicate requires an escape flag AND passes all three exclusions', () => {
++    const base = findings[0]; // escaped_gate+escaped_review true, fixed
++    expect(isEscapedDefect(base)).toBe(true);
++    expect(isEscapedDefect({ ...base, klass: 'false-positive' })).toBe(false);
++    expect(isEscapedDefect({ ...base, disposition: 'rejected' })).toBe(false);
++    expect(isEscapedDefect({ ...base, summary: 'RESOLVED: marker' })).toBe(false);
++    expect(isEscapedDefect({ ...base, escaped_gate: false, escaped_review: false })).toBe(false);
++    // either flag alone is enough
++    expect(isEscapedDefect({ ...base, escaped_review: false })).toBe(true);
++    expect(isEscapedDefect({ ...base, escaped_gate: false })).toBe(true);
++  });
++});
++
++describe('overhead ratio', () => {
++  it('per-story is null when coder_tokens == 0', () => {
++    expect(byStory('STY-B').coderTokens).toBe(0);
++    expect(byStory('STY-B').overheadRatio).toBeNull();
++  });
++
++  it('per-story is noncoder/coder when coder tokens exist', () => {
++    // STY-A: coder 150, noncoder 75 + 225 correction = 300 -> 2.
++    expect(byStory('STY-A').overheadRatio).toBe(2);
++    // STY-C: coder 15, noncoder 0 -> a real computed 0, not null.
++    expect(byStory('STY-C').overheadRatio).toBe(0);
++  });
++
++  it('headline is AGGREGATE sum(noncoder)/sum(coder), not mean of ratios', () => {
++    // all scope: coder 150+0+15+1000=1165, noncoder 300+100+0+0=400.
++    const expected = 400 / 1165;
++    expect(headlineOverhead(stories)).toBe(expected);
++    const ratios = stories.map((s) => s.overheadRatio).filter((r): r is number => r !== null);
++    const meanOfRatios = ratios.reduce((a, b) => a + b, 0) / ratios.length;
++    expect(headlineOverhead(stories)).not.toBe(meanOfRatios);
++  });
++
++  it('headline is null when total coder tokens == 0', () => {
++    expect(headlineOverhead([byStory('STY-B')])).toBeNull();
++    expect(headlineOverhead([])).toBeNull();
++  });
++});
++
++describe('mean review rounds', () => {
++  it('excludes the control arm and unrecorded rounds', () => {
++    // factory: STY-A 3 (findings max 2 + 1 pre-PR), STY-B 4 (loop fallback),
++    // STY-C null (no PR, no convergence). Control CTL-1 has rounds 10 — excluded.
++    expect(byStory('STY-A').rounds).toBe(3);
++    expect(byStory('STY-B').rounds).toBe(4);
++    expect(byStory('STY-C').rounds).toBeNull();
++    expect(byStory('CTL-1').rounds).toBe(10);
++    expect(meanReviewRounds(stories)).toBe(3.5);
++  });
++
++  it('findings take precedence over loop_converged.rounds', () => {
++    // STY-A loop_converged says 9; findings-derived value 3 wins.
++    expect(byStory('STY-A').rounds).toBe(3);
++  });
++
++  it('is null when no factory story has recorded rounds', () => {
++    expect(meanReviewRounds([byStory('STY-C'), byStory('CTL-1')])).toBeNull();
++    expect(meanReviewRounds([])).toBeNull();
++  });
++});
++
++describe('harvest semantics (metrics.py parity)', () => {
++  it('correction re-attribution is counted by story/role', () => {
++    const a = byStory('STY-A');
++    expect(a.coderTokens).toBe(150);
++    expect(a.noncoderTokens).toBe(300); // 75 reviewer + 225 controller correction
++    expect(a.dispatches).toBe(2); // corrections are not dispatches
++  });
++
++  it('sums wall_s and human_min across dispatches and human_merged', () => {
++    const a = byStory('STY-A');
++    expect(a.wallS).toBe(180);
++    expect(a.humanMin).toBe(5); // 2 dispatch + 3 human_merged
++  });
++
++  it('null human_min stays null (never 0); missing wall_s stays null', () => {
++    expect(byStory('STY-B').humanMin).toBeNull();
++    expect(byStory('STY-C').humanMin).toBeNull();
++    expect(byStory('STY-C').wallS).toBeNull();
++    expect(byStory('STY-C').costUsd).toBeNull();
++  });
++
++  it('records arm and repo per story', () => {
++    expect(byStory('STY-A').arm).toBe('factory');
++    expect(byStory('STY-A').run).toBe('demo-run');
++    expect(byStory('STY-A').repo).toBe(REPOS.demo);
++    expect(byStory('CTL-1').arm).toBe('control');
++    expect(byStory('CTL-1').repo).toBe(REPOS.control);
++  });
++
++  it('counts in-loop defect_found events separately from escaped defects', () => {
++    expect(byStory('STY-A').inLoopDefects).toBe(1);
++    // the defect_found event adds nothing to the escaped-defect count
++    expect(escapedDefectsByRepo(findings)[REPOS.demo]).toBe(2);
++  });
++});
++
++describe('fmt helper', () => {
++  it('renders null as "not recorded", never 0', () => {
++    expect(fmt(null)).toBe('not recorded');
++    expect(fmt(undefined)).toBe('not recorded');
++  });
++
++  it('renders recorded numbers faithfully (a real 0 stays 0)', () => {
++    expect(fmt(0)).toBe('0');
++    expect(fmt(3)).toBe('3');
++    expect(fmt(2.5)).toBe('2.50');
++  });
++});
++
++describe('scope filtering', () => {
++  it('selects a run subset; "all" returns everything', () => {
++    expect(selectRuns(allRuns, 'demo-run')).toEqual([factoryRun]);
++    expect(selectRuns(allRuns, 'control-run')).toEqual([controlRun]);
++    expect(selectRuns(allRuns, ALL)).toEqual(allRuns);
++    expect(selectRuns(allRuns, 'nope')).toEqual([]);
++  });
++
++  it('selects rows by repo; "all" returns everything', () => {
++    expect(selectByRepo(findings, REPOS.control)).toHaveLength(1);
++    expect(selectByRepo(findings, ALL)).toHaveLength(findings.length);
++    expect(selectByRepo(findings, 'nope')).toEqual([]);
++  });
++
++  it('storiesInScope combines run and repo filters', () => {
++    expect(storiesInScope(stories, { run: 'demo-run', repo: ALL })).toHaveLength(3);
++    expect(storiesInScope(stories, { run: ALL, repo: REPOS.control }).map((s) => s.story))
++      .toEqual(['CTL-1']);
++    expect(storiesInScope(stories, { run: ALL, repo: ALL })).toEqual(stories);
++    expect(storiesInScope(stories, { run: 'demo-run', repo: REPOS.control })).toEqual([]);
++  });
++
++  it('headline recomputes from the scoped subset only', () => {
++    const factoryOnly = storiesInScope(stories, { run: 'demo-run', repo: ALL });
++    expect(headlineOverhead(factoryOnly)).toBe(400 / 165);
++    expect(meanReviewRounds(factoryOnly)).toBe(3.5);
++  });
++});
+diff --git a/src/data/metrics.ts b/src/data/metrics.ts
+new file mode 100644
+index 0000000..56a27e5
+--- /dev/null
++++ b/src/data/metrics.ts
+@@ -0,0 +1,176 @@
++// DSH-2 derived metrics — PURE functions over parsed rows (no fetch, no
++// React). Formulas are single-sourced from the approved PRD and mirror
++// factory/metrics.py harvest() semantics. Nulls stay null, never 0.
++import type { Arm, FindingRow, LedgerTokens, RunLedger, Scope, StoryMetrics } from './types';
++
++export const ALL = 'all';
++
++// --- scope filtering (AC 5) --------------------------------------------------
++
++export function selectRuns(runs: RunLedger[], run: string): RunLedger[] {
++  return run === ALL ? runs : runs.filter((r) => r.run === run);
++}
++
++export function selectByRepo<T extends { repo?: string | null }>(rows: T[], repo: string): T[] {
++  return repo === ALL ? rows : rows.filter((r) => r.repo === repo);
++}
++
++export function storiesInScope(stories: StoryMetrics[], scope: Scope): StoryMetrics[] {
++  return stories.filter(
++    (s) => (scope.run === ALL || s.run === scope.run) && (scope.repo === ALL || s.repo === scope.repo),
++  );
++}
++
++// --- escaped defects (PRD formula 1) -----------------------------------------
++
++/** (escaped_gate OR escaped_review) AND klass != 'false-positive' AND
++ * disposition != 'rejected' AND summary does not start with 'RESOLVED'
++ * (resolution markers are records, not defects). Source is findings.jsonl,
++ * NOT ledger defect_found events (those count in-loop findings). */
++export function isEscapedDefect(f: FindingRow): boolean {
++  return Boolean(f.escaped_gate || f.escaped_review)
++    && f.klass !== 'false-positive'
++    && f.disposition !== 'rejected'
++    && !(f.summary ?? '').startsWith('RESOLVED');
++}
++
++export function escapedDefectsByRepo(findings: FindingRow[]): Record<string, number> {
++  const out: Record<string, number> = {};
++  for (const f of findings) {
++    if (isEscapedDefect(f)) out[f.repo] = (out[f.repo] ?? 0) + 1;
++  }
++  return out;
++}
++
++// --- harvest (metrics.py semantics, PRD formula 2) ----------------------------
++
++function tokenTotal(tokens: LedgerTokens | null | undefined): number {
++  return (tokens?.in || 0) + (tokens?.out || 0);
++}
++
++function detailNumber(detail: Record<string, unknown> | null | undefined, key: string): number | null {
++  const v = detail?.[key];
++  return typeof v === 'number' && Number.isFinite(v) ? v : null;
++}
++
++interface Acc {
++  story: string; run: string; arm: Arm; repo: string | null;
++  coder: number; noncoder: number; wall: number | null; human: number | null;
++  cost: number | null; dispatches: number; inLoopDefects: number;
++  pr: number | null; prePrRounds: number | null; convergedRounds: number | null;
++}
++
++/** Fold dispatch_completed (+ correction re-attribution by story/role),
++ * human_merged, defect_found, pr_opened and loop_converged into per-story
++ * metrics; rounds then come from findings per PRD formula 5. */
++export function harvestStories(runs: RunLedger[], findings: FindingRow[]): StoryMetrics[] {
++  const accs = new Map<string, Acc>();
++  for (const runLedger of runs) {
++    const run = runLedger.run;
++    const rows = runLedger.rows;
++    // Arm is a run-level fact: run_started.detail.arm === 'control' marks the
++    // single-pass control arm; every other run is the factory arm.
++    const arm: Arm = rows.some((r) => r.event === 'run_started' && r.detail?.arm === 'control')
++      ? 'control' : 'factory';
++    for (const row of rows) {
++      const story = row.story;
++      if (!story) continue;
++      const key = run + '::' + story;
++      let a = accs.get(key);
++      if (!a) {
++        a = {
++          story, run, arm, repo: null, coder: 0, noncoder: 0, wall: null,
++          human: null, cost: null, dispatches: 0, inLoopDefects: 0,
++          pr: null, prePrRounds: null, convergedRounds: null,
++        };
++        accs.set(key, a);
++      }
++      if (row.repo && !a.repo) a.repo = row.repo;
++      const ev = row.event;
++      if (ev === 'dispatch_completed') {
++        a.dispatches += 1;
++        const total = tokenTotal(row.tokens);
++        if (row.role === 'coder') a.coder += total; else a.noncoder += total;
++        if (row.wall_s) a.wall = (a.wall ?? 0) + row.wall_s;
++        if (row.cost_usd) a.cost = (a.cost ?? 0) + row.cost_usd;
++        if (row.human_min != null) a.human = (a.human ?? 0) + row.human_min;
++      } else if (ev === 'correction') {
++        // Corrections re-attribute a dispatch's usage by story/role
++        // (usage-path-bug recovery). Tokens live in detail.tokens.
++        const d = row.detail ?? {};
++        const total = tokenTotal(d.tokens as LedgerTokens | null | undefined);
++        if (total) {
++          if (row.role === 'coder') a.coder += total; else a.noncoder += total;
++          const c = detailNumber(d, 'cost_usd');
++          if (c) a.cost = (a.cost ?? 0) + c;
++        }
++      } else if (ev === 'defect_found') {
++        a.inLoopDefects += 1;
++      } else if (ev === 'human_merged') {
++        if (row.human_min != null) a.human = (a.human ?? 0) + row.human_min;
++      } else if (ev === 'pr_opened') {
++        const pr = detailNumber(row.detail, 'pr');
++        if (pr != null) a.pr = pr;
++        const pre = detailNumber(row.detail, 'pre_pr_rounds');
++        if (pre != null) a.prePrRounds = pre;
++      } else if (ev === 'loop_converged') {
++        const pr = detailNumber(row.detail, 'pr');
++        if (pr != null) a.pr = pr;
++        const rounds = detailNumber(row.detail, 'rounds');
++        if (rounds != null) a.convergedRounds = rounds;
++      }
++    }
++  }
++  const out: StoryMetrics[] = [];
++  for (const a of accs.values()) {
++    out.push({
++      story: a.story, run: a.run, arm: a.arm, repo: a.repo,
++      coderTokens: a.coder, noncoderTokens: a.noncoder,
++      overheadRatio: a.coder === 0 ? null : a.noncoder / a.coder,
++      wallS: a.wall, humanMin: a.human, costUsd: a.cost,
++      dispatches: a.dispatches, inLoopDefects: a.inLoopDefects,
++      rounds: storyRounds(a, findings),
++    });
++  }
++  return out;
++}
++
++/** PRD formula (5): max round in findings for the story's PR + 1 pre-PR
++ * round when present; else loop_converged detail.rounds; else null. */
++function storyRounds(a: Acc, findings: FindingRow[]): number | null {
++  if (a.pr != null && a.repo) {
++    const rounds = findings
++      .filter((f) => f.repo === a.repo && f.pr === a.pr)
++      .map((f) => f.round)
++      .filter((r) => typeof r === 'number' && Number.isFinite(r));
++    if (rounds.length > 0) {
++      return Math.max(...rounds) + (a.prePrRounds ?? 0);
++    }
++  }
++  return a.convergedRounds;
++}
++
++// --- headline aggregates (PRD formulas 3 and 4) -------------------------------
++
++/** AGGREGATE sum(noncoder)/sum(coder) across scope — NOT the mean of
++ * per-story ratios (matches metrics.py render_comparison headline).
++ * Null when total coder tokens == 0. */
++export function headlineOverhead(stories: StoryMetrics[]): number | null {
++  let coder = 0;
++  let noncoder = 0;
++  for (const s of stories) {
++    coder += s.coderTokens;
++    noncoder += s.noncoderTokens;
++  }
++  return coder === 0 ? null : noncoder / coder;
++}
++
++/** Mean over FACTORY-arm stories with recorded rounds (control excluded:
++ * single-pass, not reviewable). Null when none recorded — never 0. */
++export function meanReviewRounds(stories: StoryMetrics[]): number | null {
++  const rounds = stories
++    .filter((s) => s.arm === 'factory' && s.rounds != null)
++    .map((s) => s.rounds as number);
++  if (rounds.length === 0) return null;
++  return rounds.reduce((sum, r) => sum + r, 0) / rounds.length;
++}
+diff --git a/src/data/types.ts b/src/data/types.ts
+new file mode 100644
+index 0000000..ded6c36
+--- /dev/null
++++ b/src/data/types.ts
+@@ -0,0 +1,83 @@
++// DSH-2 view models — schema-0 wire shapes (factory/ledger.py, findings.py)
++// plus the derived per-story view model. Null means "not recorded", never 0.
++
++export interface LedgerTokens {
++  in?: number | null;
++  out?: number | null;
++}
++
++/** One ledger.jsonl row (schema 0). Fields absent on the wire stay optional. */
++export interface LedgerRow {
++  event: string;
++  schema?: number;
++  ts?: string | null;
++  story?: string | null;
++  role?: string | null;
++  repo?: string | null;
++  sha?: string | null;
++  model?: string | null;
++  tokens?: LedgerTokens | null;
++  cost_usd?: number | null;
++  wall_s?: number | null;
++  human_min?: number | null;
++  outcome?: string | null;
++  detail?: Record<string, unknown> | null;
++  prev?: string | null;
++}
++
++/** One state/findings.jsonl row. */
++export interface FindingRow {
++  repo: string;
++  pr: number;
++  round: number;
++  ts?: string | null;
++  source?: string | null;
++  klass?: string | null;
++  severity?: string | null;
++  summary?: string | null;
++  path?: string | null;
++  head_sha?: string | null;
++  escaped_gate?: boolean | null;
++  escaped_review?: boolean | null;
++  verified?: string | null;
++  disposition?: string | null;
++  fix_sha?: string | null;
++  gate_check?: string | null;
++}
++
++/** A run's ledger rows, tagged with the run id from GET /api/runs. */
++export interface RunLedger {
++  run: string;
++  rows: LedgerRow[];
++}
++
++export type Arm = 'factory' | 'control';
++
++/** Derived per-story metrics (metrics.py harvest semantics + PRD rounds). */
++export interface StoryMetrics {
++  story: string;
++  run: string;
++  arm: Arm;
++  repo: string | null;
++  coderTokens: number;
++  noncoderTokens: number;
++  /** noncoder/coder; null when coderTokens == 0. */
++  overheadRatio: number | null;
++  /** null when no dispatch recorded wall time — never 0. */
++  wallS: number | null;
++  /** null when no human time recorded — never 0. */
++  humanMin: number | null;
++  /** null when no cost recorded (cost_usd null/0) — never 0. */
++  costUsd: number | null;
++  dispatches: number;
++  /** In-loop defect_found events — distinct from escaped defects. */
++  inLoopDefects: number;
++  /** PRD formula (5); null when unrecorded. */
++  rounds: number | null;
++}
++
++/** Run/repo scope; 'all' selects everything. */
++export interface Scope {
++  run: string;
++  repo: string;
++}
