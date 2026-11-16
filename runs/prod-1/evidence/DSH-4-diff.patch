@@ -1,0 +1,558 @@
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+index 0950ded..0b01d1e 100644
+--- a/src/App.test.tsx
++++ b/src/App.test.tsx
+@@ -1,7 +1,8 @@
+ // DSH-3 composite — selector ABOVE cards, options discovered from /api/runs,
+ // scope change recomputes cards, prefs persist, empty/error states (AC 3-5).
++// DSH-4 — the per-story table sits below the cards and reacts to scope (AC 4).
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
++import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+ import App from './App';
+ import { controlRun, factoryRun, findings } from './data/fixtures';
+ 
+@@ -124,3 +125,53 @@ describe('App composite', () => {
+     expect(screen.getByText(/loading factory data/i)).toBeInTheDocument();
+   });
+ });
++
++describe('App per-story table (DSH-4)', () => {
++  function tableStoryIds(): string[] {
++    const table = screen.getByRole('table');
++    return within(table).getAllByRole('row').slice(1)
++      .map((r) => within(r).getAllByRole('cell')[0].textContent ?? '');
++  }
++
++  it('renders the table below the cards with all stories in scope', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    expect(screen.getByRole('heading', { name: /per-story/i })).toBeInTheDocument();
++    expect(tableStoryIds().sort()).toEqual(['CTL-1', 'STY-A', 'STY-B', 'STY-C']);
++  });
++
++  it('scope change updates table rows to the selected run only', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    fireEvent.click(screen.getByRole('button', { name: 'demo-run' }));
++    expect(tableStoryIds().sort()).toEqual(['STY-A', 'STY-B', 'STY-C']);
++    fireEvent.click(screen.getByRole('button', { name: 'control-run' }));
++    expect(tableStoryIds()).toEqual(['CTL-1']);
++    fireEvent.click(screen.getByRole('button', { name: 'all' }));
++    expect(tableStoryIds().sort()).toEqual(['CTL-1', 'STY-A', 'STY-B', 'STY-C']);
++  });
++
++  it('empty scope shows the empty state, not a blank table', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    fireEvent.click(screen.getByRole('button', { name: 'empty-run' }));
++    expect(screen.getByText(/no story data in this scope/i)).toBeInTheDocument();
++    expect(screen.queryByRole('table')).not.toBeInTheDocument();
++  });
++
++  it('findings source failed -> escaped cells not recorded, other columns live', async () => {
++    vi.stubGlobal('fetch', routeFetch({
++      '/api/findings': { error: 'state/findings.jsonl: permission denied' },
++    }));
++    render(<App />);
++    await loaded();
++    const row = screen.getByText('STY-A').closest('tr')!;
++    const cells = within(row).getAllByRole('cell').map((c) => c.textContent);
++    expect(cells[6]).toBe('not recorded'); // escaped unknown, never 0
++    expect(cells[5]).toBe('9');            // rounds fall back to loop_converged
++    expect(cells[2]).toBe('150');          // tokens still render from ledger
++  });
++});
+diff --git a/src/App.tsx b/src/App.tsx
+index be6deed..fe50d79 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
+ import './index.css';
+ import HeadlineCards from './components/HeadlineCards';
+ import ScopeSelector from './components/ScopeSelector';
++import StoryTable from './components/StoryTable';
+ import { useDashboardData } from './hooks/useDashboardData';
+ import { ALL, escapedDefectsByRepo, harvestStories, selectRuns } from './data/metrics';
+ 
+@@ -41,11 +42,11 @@ export default function App() {
+   }, [loading, runs, scope]);
+ 
+   const stories = useMemo(
+-    // When findings failed (null), pass [] so rounds fall back to the
+-    // ledger's loop_converged detail.rounds — a valid independent source
+-    // (DSH-3 review F3: the fallback is intentional, not silent data loss;
+-    // escapedDefects separately returns null to signal findings unavailable).
+-    () => harvestStories(selectRuns(ledgers, scope), findings ?? []),
++    // Pass findings through (null when the source failed): rounds fall back
++    // to the ledger's loop_converged detail.rounds inside harvest — a valid
++    // independent source (DSH-3 review F3) — while per-story escaped defects
++    // stay null to signal findings unavailable (DSH-4 AC 5).
++    () => harvestStories(selectRuns(ledgers, scope), findings),
+     [ledgers, scope, findings],
+   );
+   // Escaped defects are per-repo (PRD formula 1); attribute them to the
+@@ -82,11 +83,14 @@ export default function App() {
+           <p className="dash-empty">No story data in this scope yet.</p>
+         </div>
+       ) : (
+-        <HeadlineCards
+-          stories={stories}
+-          escapedDefects={escapedDefects}
+-          sub={scope === ALL ? 'All runs' : scope}
+-        />
++        <>
++          <HeadlineCards
++            stories={stories}
++            escapedDefects={escapedDefects}
++            sub={scope === ALL ? 'All runs' : scope}
++          />
++          <StoryTable stories={stories} />
++        </>
+       )}
+     </div>
+   );
+diff --git a/src/components/StoryTable.test.tsx b/src/components/StoryTable.test.tsx
+new file mode 100644
+index 0000000..46fce48
+--- /dev/null
++++ b/src/components/StoryTable.test.tsx
+@@ -0,0 +1,215 @@
++// DSH-4 per-story table — rows from DSH-2 harvestStories (reuse), nulls ->
++// 'not recorded' / recorded 0 -> 0, three sort columns with aria-sort, pure
++// unit-tested sort, escaped defects joined on repo+pr (AC 1-6).
++import { describe, expect, it } from 'vitest';
++import { fireEvent, render, screen, within } from '@testing-library/react';
++import StoryTable, { sortStories } from './StoryTable';
++import { harvestStories } from '../data/metrics';
++import { allRuns, findings, REPOS } from '../data/fixtures';
++import type { FindingRow, StoryMetrics } from '../data/types';
++
++const stories = harvestStories(allRuns, findings);
++
++function story(partial: Partial<StoryMetrics>): StoryMetrics {
++  return {
++    story: 'STY-X', run: 'r', arm: 'factory', repo: 'x/y',
++    coderTokens: 0, noncoderTokens: 0, overheadRatio: null,
++    wallS: null, humanMin: null, costUsd: null,
++    dispatches: 0, inLoopDefects: 0, tokensRecorded: false, rounds: null, ...partial,
++  };
++}
++
++/** Cell texts of the body row whose first cell is the story id. */
++function rowCells(id: string): string[] {
++  const row = screen.getByText(id).closest('tr');
++  if (!row) throw new Error(`no row for ${id}`);
++  return within(row).getAllByRole('cell').map((c) => c.textContent ?? '');
++}
++
++/** Story ids in rendered body order (header row skipped). */
++function rowOrder(): string[] {
++  return screen.getAllByRole('row').slice(1)
++    .map((r) => within(r).getAllByRole('cell')[0].textContent ?? '');
++}
++
++function columnHeader(name: RegExp): HTMLElement {
++  return screen.getByRole('columnheader', { name });
++}
++
++// --- AC 6: sorting is a pure function over StoryMetrics[] -------------------
++describe('sortStories (pure)', () => {
++  const a = story({ story: 'A', rounds: 3, escapedDefects: 2, wallS: 180 });
++  const b = story({ story: 'B', rounds: 4, escapedDefects: 0, wallS: 30 });
++  const c = story({ story: 'C', rounds: null, escapedDefects: null, wallS: null });
++  const d = story({ story: 'D', rounds: 10, escapedDefects: 1, wallS: 500 });
++  const input = [a, b, c, d];
++
++  it('sorts ascending and descending by each key', () => {
++    expect(sortStories(input, 'rounds', 'asc').map((s) => s.story)).toEqual(['A', 'B', 'D', 'C']);
++    expect(sortStories(input, 'rounds', 'desc').map((s) => s.story)).toEqual(['D', 'B', 'A', 'C']);
++    expect(sortStories(input, 'escaped', 'asc').map((s) => s.story)).toEqual(['B', 'D', 'A', 'C']);
++    expect(sortStories(input, 'escaped', 'desc').map((s) => s.story)).toEqual(['A', 'D', 'B', 'C']);
++    expect(sortStories(input, 'wall', 'asc').map((s) => s.story)).toEqual(['B', 'A', 'D', 'C']);
++    expect(sortStories(input, 'wall', 'desc').map((s) => s.story)).toEqual(['D', 'A', 'B', 'C']);
++  });
++
++  it('nulls sort last in BOTH directions (missing is not a small number)', () => {
++    const asc = sortStories(input, 'wall', 'asc');
++    const desc = sortStories(input, 'wall', 'desc');
++    expect(asc[asc.length - 1].story).toBe('C');
++    expect(desc[desc.length - 1].story).toBe('C');
++  });
++
++  it('does not mutate the input and is stable for ties', () => {
++    const before = input.map((s) => s.story);
++    sortStories(input, 'rounds', 'desc');
++    expect(input.map((s) => s.story)).toEqual(before);
++    const t1 = story({ story: 'T1', rounds: 2 });
++    const t2 = story({ story: 'T2', rounds: 2 });
++    expect(sortStories([t1, t2], 'rounds', 'asc').map((s) => s.story)).toEqual(['T1', 'T2']);
++    expect(sortStories([t1, t2], 'rounds', 'desc').map((s) => s.story)).toEqual(['T1', 'T2']);
++  });
++
++  it('treats undefined escapedDefects (legacy view model) as null', () => {
++    const legacy = story({ story: 'L' }); // no escapedDefects field
++    expect(sortStories([legacy, b], 'escaped', 'asc').map((s) => s.story)).toEqual(['B', 'L']);
++  });
++});
++
++// --- AC 1/3: rows, columns, nulls vs recorded zeros --------------------------
++describe('StoryTable rows', () => {
++  it('renders one row per story with harvest-derived values', () => {
++    render(<StoryTable stories={stories} />);
++    expect(screen.getAllByRole('row')).toHaveLength(5); // header + 4 stories
++    // STY-A: coder 150, noncoder 300, ratio 2, rounds 3, escaped 2, wall 180,
++    // human 5, models coder-model + review-model (correction adds no model).
++    expect(rowCells('STY-A')).toEqual([
++      'STY-A', 'factory · demo-run', '150', '300', '2', '3', '2', '180', '5',
++      'coder-model, review-model',
++    ]);
++    expect(rowCells('CTL-1')[1]).toBe('control · control-run');
++  });
++
++  it('nulls render not recorded, never 0; recorded zeros render 0', () => {
++    render(<StoryTable stories={stories} />);
++    const c = rowCells('STY-C');
++    expect(c[4]).toBe('0');              // recorded ratio 0 (15 coder, 0 non)
++    expect(c[5]).toBe('not recorded');   // rounds null
++    expect(c[6]).toBe('not recorded');   // no PR -> escaped unknown
++    expect(c[7]).toBe('not recorded');   // wall null
++    expect(c[8]).toBe('not recorded');   // human null
++    const b = rowCells('STY-B');
++    expect(b[2]).toBe('0');              // reviewer-only: recorded coder zero
++    expect(b[4]).toBe('not recorded');   // overhead null (coder == 0)
++    expect(b[6]).toBe('0');              // PR 2 has findings, none escaped
++    expect(b[8]).toBe('not recorded');   // human null
++  });
++
++  it('unrecorded token usage renders not recorded, not 0', () => {
++    const missing = harvestStories([{ run: 'r', rows: [
++      { event: 'dispatch_completed', story: 'M', role: 'coder', repo: 'x/y' },
++    ] as never }], []);
++    render(<StoryTable stories={missing} />);
++    const m = rowCells('M');
++    expect(m[2]).toBe('not recorded');
++    expect(m[3]).toBe('not recorded');
++    expect(m[9]).toBe('not recorded'); // no model recorded
++  });
++
++  it('has the ten AC columns, th scope=col, and NO cost column', () => {
++    render(<StoryTable stories={stories} />);
++    const headers = screen.getAllByRole('columnheader');
++    expect(headers.map((h) => h.textContent)).toEqual([
++      'Story', 'Arm/run', 'Coder tok', 'Non-coder tok', 'Overhead',
++      'Rounds', 'Escaped', 'Wall s', 'Human min', 'Model(s)',
++    ]);
++    for (const h of headers) expect(h).toHaveAttribute('scope', 'col');
++    expect(screen.queryByText(/cost/i)).not.toBeInTheDocument();
++  });
++});
++
++// --- AC 2: three sort columns, toggle, aria-sort, real buttons ---------------
++describe('StoryTable sorting', () => {
++  it('defaults to rounds descending and toggles asc/desc on click', () => {
++    render(<StoryTable stories={stories} />);
++    expect(rowOrder()).toEqual(['CTL-1', 'STY-B', 'STY-A', 'STY-C']);
++    expect(columnHeader(/rounds/i)).toHaveAttribute('aria-sort', 'descending');
++    fireEvent.click(screen.getByRole('button', { name: /rounds/i }));
++    expect(rowOrder()).toEqual(['STY-A', 'STY-B', 'CTL-1', 'STY-C']);
++    expect(columnHeader(/rounds/i)).toHaveAttribute('aria-sort', 'ascending');
++    fireEvent.click(screen.getByRole('button', { name: /rounds/i }));
++    expect(columnHeader(/rounds/i)).toHaveAttribute('aria-sort', 'descending');
++    expect(rowOrder()).toEqual(['CTL-1', 'STY-B', 'STY-A', 'STY-C']);
++  });
++
++  it('sorts by escaped defects; aria-sort moves to the active column', () => {
++    render(<StoryTable stories={stories} />);
++    fireEvent.click(screen.getByRole('button', { name: /escaped/i }));
++    expect(rowOrder()).toEqual(['STY-A', 'STY-B', 'STY-C', 'CTL-1']);
++    expect(columnHeader(/escaped/i)).toHaveAttribute('aria-sort', 'descending');
++    expect(columnHeader(/rounds/i)).toHaveAttribute('aria-sort', 'none');
++    fireEvent.click(screen.getByRole('button', { name: /escaped/i }));
++    expect(rowOrder()).toEqual(['STY-B', 'STY-A', 'STY-C', 'CTL-1']);
++    expect(columnHeader(/escaped/i)).toHaveAttribute('aria-sort', 'ascending');
++  });
++
++  it('sorts by wall time with nulls last', () => {
++    render(<StoryTable stories={stories} />);
++    fireEvent.click(screen.getByRole('button', { name: /wall/i }));
++    expect(rowOrder()).toEqual(['CTL-1', 'STY-A', 'STY-B', 'STY-C']);
++    expect(columnHeader(/wall/i)).toHaveAttribute('aria-sort', 'descending');
++    fireEvent.click(screen.getByRole('button', { name: /wall/i }));
++    expect(rowOrder()).toEqual(['STY-B', 'STY-A', 'CTL-1', 'STY-C']);
++    expect(columnHeader(/wall/i)).toHaveAttribute('aria-sort', 'ascending');
++  });
++
++  it('sortable headers are real dash-sort buttons; static headers are not', () => {
++    render(<StoryTable stories={stories} />);
++    const buttons = screen.getAllByRole('button');
++    expect(buttons).toHaveLength(3);
++    for (const b of buttons) expect(b).toHaveClass('dash-sort');
++    expect(within(columnHeader(/story/i)).queryByRole('button')).not.toBeInTheDocument();
++    expect(within(columnHeader(/human min/i)).queryByRole('button')).not.toBeInTheDocument();
++  });
++});
++
++// --- AC 4: empty scope --------------------------------------------------------
++describe('StoryTable empty state', () => {
++  it('shows a friendly empty state, not a blank table', () => {
++    render(<StoryTable stories={[]} />);
++    expect(screen.getByText(/no story data in this scope/i)).toBeInTheDocument();
++    expect(screen.queryByRole('table')).not.toBeInTheDocument();
++  });
++});
++
++// --- AC 5: escaped defects join findings on repo+pr ---------------------------
++describe('per-story escaped defects (repo+pr join)', () => {
++  it('attributes only findings matching BOTH repo and pr', () => {
++    // Same pr number in a different repo must NOT leak into STY-A's count.
++    const extra: FindingRow = {
++      repo: 'other/repo', pr: 1, round: 1, escaped_gate: true,
++      summary: 'escape elsewhere', klass: 'bug', disposition: 'fixed',
++    };
++    const joined = harvestStories(allRuns, [...findings, extra]);
++    render(<StoryTable stories={joined} />);
++    expect(rowCells('STY-A')[6]).toBe('2'); // not 3
++    expect(rowCells('STY-B')[6]).toBe('0'); // pr 2: findings exist, none escaped
++  });
++
++  it('excludes false-positive/rejected/RESOLVED via the shared formula', () => {
++    // Fixture pr 1 carries fp/rejected/RESOLVED/non-escaped rows alongside
++    // the 2 genuine escapes — the count must stay 2 (formula single-sourced).
++    render(<StoryTable stories={stories} />);
++    expect(rowCells('STY-A')[6]).toBe('2');
++    expect(REPOS.demo).toBe('demo/factory');
++  });
++
++  it('findings source failed (null) -> escaped not recorded, rounds fall back', () => {
++    const noFindings = harvestStories(allRuns, null);
++    render(<StoryTable stories={noFindings} />);
++    expect(rowCells('STY-A')[6]).toBe('not recorded');
++    expect(rowCells('STY-B')[6]).toBe('not recorded');
++    // rounds still come from the ledger fallback (STY-A loop_converged 9).
++    expect(rowCells('STY-A')[5]).toBe('9');
++  });
++});
+diff --git a/src/components/StoryTable.tsx b/src/components/StoryTable.tsx
+new file mode 100644
+index 0000000..c32de98
+--- /dev/null
++++ b/src/components/StoryTable.tsx
+@@ -0,0 +1,115 @@
++// DSH-4 per-story table — wireframe StoryTable structure/classes wired to
++// DSH-2's harvestStories output (reuse, no reimplementation). Sortable by
++// rounds/escaped/wall only (AC 2); nulls render 'not recorded', never 0
++// (AC 3); cost is a headline card, NOT a column. Sorting is the pure
++// sortStories function below — no inline sort logic in the JSX (AC 6).
++import { useState } from 'react';
++import { fmt } from '../data/format';
++import type { StoryMetrics } from '../data/types';
++
++export type SortKey = 'rounds' | 'escaped' | 'wall';
++export type SortDir = 'asc' | 'desc';
++
++function sortValue(s: StoryMetrics, key: SortKey): number | null {
++  if (key === 'rounds') return s.rounds;
++  if (key === 'wall') return s.wallS;
++  return s.escapedDefects ?? null;
++}
++
++/** Pure, non-mutating sort over StoryMetrics[]. Nulls sort LAST in both
++ * directions (a missing measurement is not a small number); ties keep
++ * input order (stable sort). Unit-tested; the component renders from it. */
++export function sortStories(stories: StoryMetrics[], key: SortKey, dir: SortDir): StoryMetrics[] {
++  const sign = dir === 'asc' ? 1 : -1;
++  return [...stories].sort((a, b) => {
++    const av = sortValue(a, key);
++    const bv = sortValue(b, key);
++    if (av === null && bv === null) return 0;
++    if (av === null) return 1;
++    if (bv === null) return -1;
++    return sign * (av - bv);
++  });
++}
++
++const SORT_COLUMNS: { key: SortKey; label: string }[] = [
++  { key: 'rounds', label: 'Rounds' },
++  { key: 'escaped', label: 'Escaped' },
++  { key: 'wall', label: 'Wall s' },
++];
++
++interface Props {
++  stories: StoryMetrics[];
++}
++
++export default function StoryTable({ stories }: Props) {
++  const [sortKey, setSortKey] = useState<SortKey>('rounds');
++  const [sortDir, setSortDir] = useState<SortDir>('desc');
++
++  if (stories.length === 0) {
++    return (
++      <div className="dash-card">
++        <h2 className="dash-title">Per-story</h2>
++        <p className="dash-empty">No story data in this scope yet.</p>
++      </div>
++    );
++  }
++
++  const toggleSort = (key: SortKey) => {
++    if (key === sortKey) {
++      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
++    } else {
++      setSortKey(key);
++      setSortDir('desc');
++    }
++  };
++
++  const rows = sortStories(stories, sortKey, sortDir);
++  const ariaSort = (key: SortKey): 'ascending' | 'descending' | 'none' =>
++    key === sortKey ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none';
++  const sortHeader = (key: SortKey, label: string) => (
++    <th scope="col" aria-sort={ariaSort(key)}>
++      <button type="button" className="dash-sort" onClick={() => toggleSort(key)}>
++        {label}
++      </button>
++    </th>
++  );
++  // Token usage renders 'not recorded' unless usage was actually recorded —
++  // a dispatch with null tokens must not display as a recorded zero.
++  const tokens = (s: StoryMetrics, n: number) => (s.tokensRecorded ? fmt(n) : 'not recorded');
++
++  return (
++    <div className="dash-card">
++      <h2 className="dash-title">Per-story</h2>
++      <table className="dash-table">
++        <thead>
++          <tr>
++            <th scope="col">Story</th>
++            <th scope="col">Arm/run</th>
++            <th scope="col">Coder tok</th>
++            <th scope="col">Non-coder tok</th>
++            <th scope="col">Overhead</th>
++            {SORT_COLUMNS.map((c) => sortHeader(c.key, c.label))}
++            <th scope="col">Human min</th>
++            <th scope="col">Model(s)</th>
++          </tr>
++        </thead>
++        <tbody>
++          {rows.map((s) => (
++            <tr key={s.run + '::' + s.story}>
++              <td>{s.story}</td>
++              <td>{s.arm} · {s.run}</td>
++              <td>{tokens(s, s.coderTokens)}</td>
++              <td>{tokens(s, s.noncoderTokens)}</td>
++              <td>{fmt(s.overheadRatio)}</td>
++              <td>{fmt(s.rounds)}</td>
++              <td>{fmt(s.escapedDefects ?? null)}</td>
++              <td>{fmt(s.wallS)}</td>
++              <td>{fmt(s.humanMin)}</td>
++              <td className="dash-model">{s.models?.length ? s.models.join(', ') : 'not recorded'}</td>
++            </tr>
++          ))}
++        </tbody>
++      </table>
++    </div>
++  );
++}
+diff --git a/src/data/metrics.ts b/src/data/metrics.ts
+index c61a24c..4224be0 100644
+--- a/src/data/metrics.ts
++++ b/src/data/metrics.ts
+@@ -69,12 +69,13 @@ interface Acc {
+   cost: number | null; dispatches: number; inLoopDefects: number;
+   tokensRecorded: boolean;
+   pr: number | null; prePrRounds: number | null; convergedRounds: number | null;
++  models: string[];
+ }
+ 
+ /** Fold dispatch_completed (+ correction re-attribution by story/role),
+  * human_merged, defect_found, pr_opened and loop_converged into per-story
+  * metrics; rounds then come from findings per PRD formula 5. */
+-export function harvestStories(runs: RunLedger[], findings: FindingRow[]): StoryMetrics[] {
++export function harvestStories(runs: RunLedger[], findings: FindingRow[] | null): StoryMetrics[] {
+   const accs = new Map<string, Acc>();
+   for (const runLedger of runs) {
+     const run = runLedger.run;
+@@ -93,7 +94,7 @@ export function harvestStories(runs: RunLedger[], findings: FindingRow[]): Story
+           story, run, arm, repo: null, coder: 0, noncoder: 0, wall: null,
+           human: null, cost: null, dispatches: 0, inLoopDefects: 0,
+           tokensRecorded: false,
+-          pr: null, prePrRounds: null, convergedRounds: null,
++          pr: null, prePrRounds: null, convergedRounds: null, models: [],
+         };
+         accs.set(key, a);
+       }
+@@ -101,6 +102,7 @@ export function harvestStories(runs: RunLedger[], findings: FindingRow[]): Story
+       const ev = row.event;
+       if (ev === 'dispatch_completed') {
+         a.dispatches += 1;
++        if (row.model && !a.models.includes(row.model)) a.models.push(row.model);
+         const total = tokenTotal(row.tokens);
+         if (hasUsage(row.tokens)) a.tokensRecorded = true;
+         if (row.role === 'coder') a.coder += total; else a.noncoder += total;
+@@ -150,7 +152,9 @@ export function harvestStories(runs: RunLedger[], findings: FindingRow[]): Story
+       wallS: a.wall, humanMin: a.human, costUsd: a.cost,
+       dispatches: a.dispatches, inLoopDefects: a.inLoopDefects,
+       tokensRecorded: a.tokensRecorded,
+-      rounds: storyRounds(a, findings),
++      rounds: storyRounds(a, findings ?? []),
++      escapedDefects: storyEscapedDefects(a, findings),
++      models: a.models,
+     });
+   }
+   return out;
+@@ -171,6 +175,17 @@ function storyRounds(a: Acc, findings: FindingRow[]): number | null {
+   return a.convergedRounds;
+ }
+ 
++/** DSH-4 (AC 5): per-story escaped defects — findings joined on repo+pr,
++ * same join pattern as storyRounds, filtered by the shared isEscapedDefect
++ * formula. Null when findings failed (source unavailable) or the story has
++ * no recorded repo/pr to join on; a joined PR with zero escapes is a real 0. */
++function storyEscapedDefects(a: Acc, findings: FindingRow[] | null): number | null {
++  if (findings === null || a.pr == null || !a.repo) return null;
++  return findings.filter(
++    (f) => f.repo === a.repo && f.pr === a.pr && isEscapedDefect(f),
++  ).length;
++}
++
+ // --- headline aggregates (PRD formulas 3 and 4) -------------------------------
+ 
+ /** AGGREGATE sum(noncoder)/sum(coder) across scope — NOT the mean of
+diff --git a/src/data/types.ts b/src/data/types.ts
+index 676ce27..d327793 100644
+--- a/src/data/types.ts
++++ b/src/data/types.ts
+@@ -79,6 +79,13 @@ export interface StoryMetrics {
+   tokensRecorded: boolean;
+   /** PRD formula (5); null when unrecorded. */
+   rounds: number | null;
++  /** DSH-4: escaped defects joined on repo+pr (PRD formula 1 per story).
++      Null when the findings source failed OR the story has no recorded PR.
++      Optional so pre-DSH-4 view-model literals stay valid. */
++  escapedDefects?: number | null;
++  /** DSH-4: distinct models recorded on the story's dispatches, in first-
++      seen order. Empty when no dispatch recorded a model. */
++  models?: string[];
+ }
+ 
+ /** Run/repo scope; 'all' selects everything. */
+diff --git a/src/index.css b/src/index.css
+index 515d4a1..3a331b7 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -37,3 +37,11 @@ body { background: var(--paper); color: var(--ink); font-family: system-ui, sans
+ .dash-error { border: 1px solid var(--accent); border-radius: 8px; padding: 14px; background: var(--surface); }
+ .dash-error strong { color: var(--accent); }
+ .dash-error p { margin: 6px 0 0; font-size: 0.85rem; color: var(--ink); }
++/* DSH-4 — per-story table rules from the approved wireframe (dash.css),
++   same theme variables (contrast-audited AA both themes). */
++.dash-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
++.dash-table th, .dash-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
++.dash-table th { color: var(--ink-soft); font-weight: 600; }
++.dash-sort { background: none; border: none; color: var(--accent); cursor: pointer; font: inherit; font-weight: 600; padding: 0; }
++.dash-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
++.dash-model { color: var(--ink-soft); font-size: 0.75rem; }
