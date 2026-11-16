@@ -364,3 +364,27 @@ rounds."
   review → Auto-approval must be ON (UI-only, not API-settable); an approval is
   DISMISSED on new commits, so every fix push needs a fresh request. Enabled on
   `software-factory` and `factory-todo-demo`.
+
+### OC-17 amendment — Copilot review is a per-workspace LEVER (Randy, 2026-11-16)
+
+**Randy: "I don't want auto Copilot reviews. That should be a lever in the
+factory."** The blanket "Copilot approval required for every story" above is
+hereby SCOPED to the workspace that ratified it (todo-demo / SKEL-1). It is
+NOT universal. Copilot review becomes a per-workspace policy lever
+(`factory/policy.py`, `workspace.json`), restoring OC-9's configurability:
+
+- `copilot_review: "required"` — request Copilot, block merge on APPROVED
+  (the todo-demo / SKEL-1 behavior, preserved for that workspace).
+- `copilot_review: "optional"` — request Copilot as a second opinion; its
+  findings are input, but the factory's own gates + cross-family review are
+  the merge gate (no dependency on the platform's UI-only auto-approval).
+- `copilot_review: "off"` — never request Copilot; the factory review lane
+  alone gates. **This is the software-factory workspace setting (Randy's
+  call), effective for PROD-1 onward.**
+
+Rationale: the factory OWNS its gates (OC-9). A platform UI setting is not a
+policy the factory controls; depending on it made DSH-1 stall waiting for an
+APPROVED state that a per-repo toggle governed. The deterministic gates +
+fresh-context cross-family review are the proven gate (SKEL-1: 0 escaped
+defects). The bot is a lever, not a dependency. The <5-round target and PR
+size budget REMAIN in force for all workspaces.

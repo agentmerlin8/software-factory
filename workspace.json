@@ -1,0 +1,1 @@
+{"copilot_review": "off", "human_merge": true, "_note": "Randy 2026-11-16: no auto Copilot reviews; the factory's own gates + cross-family review are the gate. Copilot review is a per-workspace lever (OC-9), not a platform dependency. OC-17's blanket requirement is scoped to todo-demo only."}
