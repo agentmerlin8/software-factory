@@ -1,4 +1,4 @@
-# HANDOFF — SKEL-1 + SKEL-2 DONE (next is SKEL-3)
+# HANDOFF — SKEL-1/2/3 DONE (next is SKEL-4)
 
 **Updated:** 2026-11-15 · supersedes the work-item table in `HANDOFF.md` §5.
 **Read `HANDOFF.md` first** for cold-start, decisions, board IDs, conventions.
@@ -8,22 +8,28 @@
 - **SKEL-1 (issue #3) DONE — OC-16 GO.** Factory 0 escaped defects vs
   control 6 (incl. data-loss BLOCKER) at ~3.8× tokens; cost accepted.
 - **SKEL-2 (issue #4) DONE — hypothesis 2 HOLDS (caveat).** Intake CLI +
-  intake-agent role + Storybook wireframes built. Independent engineer
-  persona: round 1 REQUEST-CHANGES (2 blockers: no ACs, no persistence) →
-  made acceptance/persistence/data_model REQUIRED categories → round 2
-  APPROVE, all 7 concerns resolved. 2 rounds, 226s review time.
-  **Caveat:** agent persona, not a human engineer — measures artifact
-  clarity, not human acceptance; a real non-owner test is the follow-up.
-  Evidence: `docs/experiments/skel-2-intake-2026-11-15.md`, `runs/skel-2/`.
+  intake-agent role + Storybook wireframes. Engineer persona APPROVE round 2
+  (2 rounds, 226s); caveat: agent not human, real engineer test is follow-up.
+- **SKEL-3 (issue #5) DONE — OC-14 security model live + proven (twice).**
+  Validator core (`factory/controller.py`), serialized controller-writer
+  workflow, two least-privilege Apps: `agentmerlin8-factory-agent` (5777949,
+  factory-todo-demo only) + `agentmerlin8-factory-controller` (5777982,
+  software-factory only). Agent CANNOT write state (403 on ledger PUT + ref
+  create); controller is sole writer (2 live runs, ledger 119→121, chain
+  intact); contention test 12×5 all land, zero retries. Proof script:
+  `scripts/proof-identity.py` (arg3=must-fail repo, arg4=push-target,
+  owner/repo form). Evidence: `docs/plans/skel-3-controller-writer.md`.
 
-**NEXT WORK: SKEL-3 (issue #5) — controller-writer security (OC-14).**
-Agents never hold a state-repo write token; a separate controller job (no
-model output, no product code) validates + appends; two identities (agent
-App / controller App); single controller writer serialized by one
-concurrency group. Works on Free plan. Read issue #5 + OC-14 before scoping.
+**NEXT WORK: SKEL-4 (issue #6) — merge protocol (OC-15).** Update-before-
+review + strict up-to-date; squash tree == reviewed head by construction;
+post-merge tree compare as ALARM only; re-review only when the story diff
+changed or main's delta touches its manifest. VERIFY on one real PR (rename
++ line-ending case). EXP-1/2/3 already verified the strict gate mechanics.
+Read issue #6 + OC-15 before scoping.
 
 - Product repo: `agentmerlin8/factory-todo-demo` (public), main `0759dae`.
 - Control repo: `agentmerlin8/factory-todo-control` (public), main `f7ac685`.
+- State: software-factory `runs/` + `state/` (v1 decision; OC-8 split later).
 - Intake artifacts: `factory/intake.py`, `process/intake-agent.md`,
   `templates/wireframes/`, `runs/skel-2/`.
 - Comparison: `runs/COMPARISON.md`. Findings log: `state/findings.jsonl`.
@@ -97,18 +103,19 @@ Use `.venv/bin/python` (pytest lives there).
    → Auto-approval), UI-only, off by default, dismissed on new commits. Enabled
    on both repos. `requestReviewsByLogin` GraphQL is the re-request that registers.
 
-## Next action: SKEL-3 (controller-writer security)
+## Next action: SKEL-4 (merge protocol)
 
-SKEL-1 (GO) and SKEL-2 (intake, hypothesis 2 holds) are closed. Do not
+SKEL-1 (GO), SKEL-2 (intake), and SKEL-3 (security) are closed. Do not
 re-open them or re-run their arms without an explicit owner request. The
-next skeleton item is **SKEL-3 (issue #5): controller-writer security
-(OC-14)** — agents never hold a state-repo write token; a separate
-controller job (no model output, no product code) validates + appends; two
-identities (agent App / controller App); single controller writer
-serialized by one concurrency group (fixes ledger contention, MRG-1).
-Works on the Free plan. Read issue #5 + OC-14 + the github-apps skill
-before scoping. Same discipline: fresh run chat, repo is the state, slice
-law (OC-17 sizing), Copilot approval + human merge.
+next skeleton item is **SKEL-4 (issue #6): merge protocol (OC-15)** —
+update-before-review + strict up-to-date; squash tree == reviewed head by
+construction; post-merge tree compare as ALARM only (no auto-revert); red
+main → block dispatches + prepared revert PR in the inbox; re-review only
+when the story's diff changed or main's delta touches its manifest. VERIFY
+on one real PR (rename + line-ending case). EXP-1/2/3 already verified the
+strict-gate mechanics on public+Free. Read issue #6 + OC-15 before scoping.
+Same discipline: fresh run chat, repo is the state, slice law (OC-17
+sizing), Copilot approval + human merge.
 
 **SKEL-2 follow-up (when a human is available):** a real non-owner engineer
 test of the intake PRD — the agent-persona approval is the weaker evidence
@@ -122,6 +129,6 @@ defect" pattern (3×) are the concrete prevention targets.
 
 ## Board
 
-Issues #3 (SKEL-1) and #4 (SKEL-2) Done (Status=Done, Stage=Done).
-Issues #8/#9 (EXP-1/2) Done. Issues #5/#6/#7 (SKEL-3/4/5) Backlog.
+Issues #3 (SKEL-1), #4 (SKEL-2), #5 (SKEL-3) Done (Status=Done, Stage=Done).
+Issues #8/#9 (EXP-1/2) Done. Issues #6/#7 (SKEL-4/5) Backlog.
 Board IDs and the `printf -v` GraphQL pattern are in `HANDOFF.md` §6.
