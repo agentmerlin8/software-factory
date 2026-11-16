@@ -1,0 +1,102 @@
+Here is the full Round 2 review.
+
+---
+
+## ROUND 2 VERIFICATION — PRIOR CONCERNS
+
+**B1 — data-loading (BLOCKER in R1): RESOLVED.**
+PRD Platform section now specifies a thin read-only loopback HTTP server with three concrete endpoints (GET /api/runs, GET /api/ledger?run=<id>, GET /api/findings). Read-only invariant enforced (non-GET → 405). Vite proxy and static-build same-origin path both documented. Error handling for unreadable files specified ({error: '<file>: <reason>'}, 200). Persistence section confirms the server always reads fresh from disk. An engineer can build this without inventing anything.
+
+**B2 — escaped-defect formula (BLOCKER in R1): RESOLVED.**
+Exact formula: `(escaped_gate OR escaped_review) AND klass != 'false-positive' AND disposition != 'rejected' AND summary NOT LIKE 'RESOLVED%'`. The SKEL-1 narrative discrepancy (6 vs 7) is explicitly acknowledged, explained, and resolved: "The formula is authoritative; the dashboard shows 7." Wireframe mock data: `defects: 7` for control arm. Verification anchor present.
+
+**M1 — escaped-defects chart (MAJOR in R1): RESOLVED.**
+DashWireframes.tsx lines 91-99: second bar chart in Trends component, "Escaped defects per story (all arms)", green bars via `dash-bar--defect` class, tooltips via `title`. Matches the review-rounds chart style. Storybook story `factory-dashboard--trend-views` renders both.
+
+**M2 — ScopeSelector in composite (MAJOR in R1): RESOLVED.**
+FullDashboard component (lines 148-164) renders scope selector in its own card ABOVE HeadlineCards, StoryTable, and Trends. PRD acceptance criteria: "The composite view renders the selector ABOVE the data views and all views react to it." Storybook story `factory-dashboard--full` exists.
+
+**M3 — cycle-time cut documented (MAJOR in R1): RESOLVED.**
+PRD: "Cycle-time-over-time trend is DEFERRED to v2 (cycle time is visible as wall_s in the table; owner chose the middle feature tier)." Wireframe Trends component line 105: `<p className="dash-note">Cycle-time trend deferred to v2 (wall time is in the table).</p>`.
+
+**M4 — cost formula placeholder (MAJOR in R1): RESOLVED.**
+PRD Assumptions section: cost = sum over dispatches of `model_rate_usd_per_1k * (tokens_in + tokens_out) / 1000`, keyed by model name; unknown-model → "not recorded"; USD to 2 decimal places; gated on "WHEN a price table lands." Wireframe: cost card renders `"not recorded"`.
+
+**m1 — mean-rounds scope (MINOR in R1): RESOLVED.**
+PRD formula: "Mean review rounds = mean over FACTORY-arm stories in scope (control excluded: single-pass, not reviewable)." Wireframe line 18: `STORIES.filter(s => s.arm === "factory")` with `/5` hardcoded denominator (mock limitation, not a spec gap).
+
+**m2 — sortable columns narrowed (MINOR in R1): RESOLVED.**
+PRD: "Sortable by rounds, escaped defects, and wall time (three sort columns; other columns static in v1)." Wireframe StoryTable: only Rounds, Escaped, and Wall s columns have `<button className="dash-sort">` with onClick handlers. Other headers are plain `<th>`.
+
+**m3 — data-driven scope note (MINOR in R1): RESOLVED.**
+Wireframe ScopeSelector line 127: `<p className="dash-note">Scope options discovered from /api/runs at runtime; this list is illustrative.</p>`. PRD: "Selector options are DISCOVERED from GET /api/runs."
+
+**m4 — error-state story (MINOR in R1): RESOLVED.**
+ErrorState component and story `factory-dashboard--error` exist. PRD Persistence: "On unreadable/corrupt file: the server returns {error: '<file>: <reason>'} with 200 for that source; the UI shows a per-source error state (file + reason), never crashes, never fabricates numbers."
+
+**All 10 prior concerns: RESOLVED.**
+
+---
+
+## NEW GAPS FOUND
+
+### GAP-1: Thin server technology unspecified (MINOR)
+
+The PRD specifies endpoints, HTTP methods, error format, and loopback binding. It does NOT specify: what language/runtime the server is written in (Node? Python?), where it lives in the repo, how to start it alongside the Vite dev server, or whether it reuses the existing `factory/metrics.py` logic. The package.json has no server-related scripts. The PRD references "factory/metrics.py harvest output" but doesn't connect it to the server implementation.
+
+An engineer can choose a technology, but they're inventing that decision. Recommend: either (a) note "server technology TBD by implementer" in Assumptions, or (b) if the existing `metrics.py` is the natural host, say so and define a `server.py` entry point.
+
+### GAP-2: Overhead ratio — aggregate vs per-story not disambiguated (MINOR)
+
+The formula: `noncoder_tokens / coder_tokens (None when coder_tokens == 0)`. This works for per-story rows (each row has one coder_tokens value). For the headline card, "process-overhead ratio across the selected scope" could be:
+
+- Aggregate: sum(noncoder) / sum(coder) → 0.841 for mock data
+- Mean of per-story ratios: mean(0, 1.117, 0.579, 0.940, 1.377) → 0.803
+
+The wireframe shows 0.94, which happens to be TOD-4's individual ratio — not matching either aggregate interpretation. An engineer reading the PRD would likely choose aggregate (matching "across the selected scope" language), but it's not explicit. Recommend: clarify "aggregate ratio (sum noncoder / sum coder across scope)."
+
+### GAP-3: Trends component wireframe has no empty-state branch (MINOR)
+
+PRD acceptance criteria for trend views: "empty scope shows a friendly empty state, not a blank axis." The ScopeSelector component has an empty state (`dash-empty`), and the story `factory-dashboard--scope-empty` covers it. But the Trends component always renders bars — it has no conditional branch for receiving zero stories. Since the wireframe doesn't wire scope through to child components, this doesn't surface, but a real implementation needs it. The PRD text covers it; the wireframe just doesn't demonstrate it.
+
+Recommend: either add an empty-state guard in Trends (simple), or note in the PRD that empty-state rendering is delegated to the parent scope container — but right now the language says each view handles it.
+
+### GAP-4: No loading state specified (MINOR)
+
+The dashboard fetches from /api/runs, /api/ledger, and /api/findings. Between mount and data arrival there's a loading period. Neither the PRD nor the wireframes specify a loading state. The PRD covers error and empty states but skips loading. An engineer can add a spinner or skeleton, but it's a product decision: what does the dashboard look like while waiting? Recommend: add a 1-line note ("Loading state: subtle spinner or skeleton; implementation detail, no separate wireframe required.")
+
+### GAP-5: FullDashboard wireframe doesn't demonstrate scope reactivity (MINOR)
+
+FullDashboard (lines 148-164) renders Scope selector + HeadlineCards + StoryTable + Trends, but `scope` state is local to FullDashboard and never passed to child components. HeadlineCards, StoryTable, and Trends always render the full STORIES array. This is understandable for a wireframe (the data views receive no props), but it means the "all views react to scope" behavior from the PRD is not visually demonstrated. An engineer reading the PRD knows the intent; the wireframe just doesn't prove the interaction.
+
+### GAP-6: Wireframe model-mix data diverges from STORIES data (COSMETIC)
+
+The mock STORIES array only contains `qwen4-max-preview` stories (6 rows). The Trends model-mix section shows two rows: `qwen4-max-preview` (7.76M, 70%) and `deepseek-v4-pro` (3.32M, 30%). The second model doesn't appear in STORIES. Total tokens shown (~11.08M) also doesn't match the STORIES total (~11.08M — wait, let me check: 5,716,735 coder + 4,806,215 non + 2,625,505 control coder = 13,148,455 total. 7.76 + 3.32 = 11.08. Neither matches.). This is purely cosmetic for a wireframe, but a reviewer who traces the numbers will find inconsistency. Recommend: either align mock data or add a comment that the model mix is illustrative.
+
+### GAP-7: Port number discrepancy (COSMETIC)
+
+The PRD says "localhost:6007" but package.json scripts say `storybook dev -p 6006`. Both ports currently serve Storybook (6007 appears to be a separate static-file server, possibly `npx serve storybook-static -p 6007`). The PRD's URL works, so this is operational, but the port mismatch between source of truth (package.json) and documented URL (PRD) will confuse someone starting fresh. Recommend: align to one port.
+
+---
+
+## WHAT IS GOOD
+
+- The PRD faithfully captures the original one-sentence description and expands it into four concrete features without adding scope creep.
+- The read-only invariant is consistently enforced across the PRD, server spec, and persistence section.
+- The "not recorded" (never 0) convention is unambiguous and consistently applied.
+- The escaped-defect formula is precise and the 6-vs-7 discrepancy is handled honestly — an engineer can implement it directly.
+- All wireframe stories exist and match the feature list. Error and empty states are covered.
+- The deferral of cycle-time trend to v2 is documented both in PRD and wireframe, with the fallback (wall_s in table) noted.
+- The cost placeholder is gated on a future price table with the exact formula ready.
+- The scope-selector discovery mechanism (GET /api/runs) is specified and the wireframe clearly marks its hardcoded list as illustrative.
+- Color theme has light + dark variants with CSS custom properties, and the PRD claims AA contrast audit (implementation to verify).
+- The PRD specifies Vitest + Testing Library even though the wireframe package.json doesn't include them — the intent for the real build is clear.
+
+---
+
+## VERDICT: APPROVE with notes
+
+No blockers. All 10 prior concerns are resolved with evidence. The 7 new gaps are all minor/cosmetic — none would prevent an engineer from starting implementation. The spec is concrete, the formulas are exact, the wireframes cover all four features plus error/empty states, and the data-loading architecture (thin loopback server) is adequately specified.
+
+Recommend addressing GAP-1 (server technology) and GAP-2 (overhead ratio disambiguation) before coding begins, but neither blocks approval. The rest are implementation details an engineer resolves during build.
+engineer review r2 wall_s=294

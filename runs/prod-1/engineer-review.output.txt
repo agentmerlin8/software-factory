@@ -1,0 +1,156 @@
+I now have a complete picture. Here's my independent engineering review.
+
+---
+
+## ENGINEERING REVIEW: Factory Dashboard PRD + Wireframes
+
+**Verdict: REQUEST-CHANGES** — 2 blockers, 4 major concerns, 4 minor concerns.
+
+---
+
+### BLOCKERS
+
+**B1. Data-loading mechanism is unspecified and self-contradictory.**
+
+The PRD says three things that cannot all be true simultaneously:
+- "Local web app (browser)"
+- "No backend server, no accounts"
+- "reads runs/*/ledger.jsonl and state/findings.jsonl from the local filesystem"
+
+A browser has no `fs` access. You can't serve static HTML that reads the local filesystem. Three possible resolutions, none chosen:
+
+(a) A thin data server (Express/Fastify) that serves JSONL over HTTP on localhost — contradicts "no backend server"
+(b) Vite `import.meta.glob` to bundle JSONL at build time into static assets — means data is stale until rebuild, and the "bundled snapshot" phrase hints at this, but it's not explicit
+(c) File System Access API (`showDirectoryPicker`) — requires user gesture every session, fragile
+
+The wireframes sidestep this entirely by using hardcoded mock data. That's fine for a wireframe, but the PRD must pick a mechanism and state it unambiguously. An engineer cannot start without this decision.
+
+**Fix:** Specify the mechanism. Recommendation: a small local data server on a random port that the Vite dev server proxies to (or that the static build talks to). Document the exact endpoints. Or commit to the "bundled snapshot" path and accept staleness as a documented limitation.
+
+---
+
+**B2. "Escaped defects" is ambiguous — two data sources, no formula.**
+
+The PRD says "escaped defects" repeatedly. The wireframe mock shows `defects: 6` for the control arm, matching the SKEL-1 count of control-arm escaped defects. But:
+
+- `factory/metrics.py` `harvest()` counts `defect_found` events from the **ledger** (line 69-70). The actual ledger files contain **zero** `defect_found` events — the real defects live in `state/findings.jsonl`.
+- `state/findings.jsonl` has **two** boolean fields: `escaped_gate` (38 true) and `escaped_review` (30 true). Some rows have both true, some have only one.
+
+Which field(s) constitute an "escaped defect"? `escaped_gate`? `escaped_review`? Either? Both (AND)? The PRD data model claims `StoryMetrics` has a `defects` field from the ledger, but the actual source is findings. The metrics.py harvest code and the findings.jsonl schema are misaligned. An engineer would have to invent the formula.
+
+**Fix:** Specify the exact query: e.g., "count findings where `escaped_gate OR escaped_review` is true, grouped by repo (scope)." Also decide whether the defect count in the wireframe (6 for control) matches this formula. Verify: findings for `factory-todo-control` repo show 7 findings; filter by escaped_gate=true gives 7; by escaped_review=true gives 2. Pick one.
+
+---
+
+### MAJOR
+
+**M1. Trend views wireframe is missing the escaped-defects chart.**
+
+The PRD acceptance criteria says: "Charts of review-rounds-per-story and escaped-defects-per-story over the run sequence, plus model-mix breakdown."
+
+The Trends wireframe component shows:
+- Review rounds per story (bar chart) ✓
+- Model mix (horizontal bars) ✓
+- Escaped defects per story — **MISSING** ✗
+
+The chart that IS present for defects is a single number in the headline cards. There is no per-story defects trend view anywhere in the wireframes.
+
+**Fix:** Add an escaped-defects-per-story chart to the Trends component, or remove it from the PRD's acceptance criteria (documenting the scope cut).
+
+---
+
+**M2. FullDashboard composite omits the ScopeSelector.**
+
+`FullDashboard` renders `<HeadlineCards />`, `<StoryTable />`, `<Trends />` — no `<ScopeSelector />`. The PRD says scope changes recompute cards/table/trends. Without the selector present in the composite view, scope filtering can't be exercised. An engineer building from this wireframe would not know where the selector lives relative to the other views.
+
+**Fix:** Add `<ScopeSelector />` to `FullDashboard` and wire the `scope` state up so all three data views react to it (or at minimum, render it above them in the composite).
+
+---
+
+**M3. "Cycle time" from the original description has no trend chart.**
+
+Original: "see cycle time, cost, model mix, and defect/review-round trends."
+
+What the PRD + wireframes deliver:
+- Cycle time: only as `wall_s` column in the per-story table. No cycle-time-over-time trend chart.
+- The Trends component has: review rounds (bar), model mix (bars). No cycle time trend.
+
+This could be an intentional scope cut (the PRD says "owner chose the middle feature tier"), but it's not documented as such. The original description explicitly asks for cycle time trends. The PRD doesn't acknowledge the omission.
+
+**Fix:** Either add a cycle-time trend chart (wall_s over run sequence) to the Trends component, or add an explicit note under "Assumptions & resolved ambiguities" that cycle-time trends are deferred to v2, with the rationale.
+
+---
+
+**M4. Cost formula is undefined for when a price table exists.**
+
+The PRD says "Cost is tokens-only until a trusted price table exists (cost_usd often null/0 → render 'not recorded')." The wireframe hardcodes `"not recorded"`. This is fine for v1. But:
+
+No placeholder spec exists for what happens when the price table DOES land. An engineer building today won't know:
+- Which token count (total? coder-only? output-only?) is multiplied by what rate
+- Whether per-model pricing is expected (qwen4 vs deepseek have different rates)
+- USD precision (cents? fractional?)
+
+This is a deferred decision with zero scaffolding. An engineer would have to invent it later or hardcode it.
+
+**Fix:** Add a one-sentence placeholder: "When a price table is available, cost = sum over dispatches of (model_rate_usd_per_1k * (tokens_in + tokens_out) / 1000), keyed by model name, with unknown-model dispatches rendering 'not recorded'." Or explicitly defer with a SKEL ticket reference.
+
+---
+
+### MINOR
+
+**m1. Mean review rounds: factory-only or all stories?**
+
+The wireframe computes mean rounds as `factory_stories_rounds_sum / 5` (hardcoded factory count). The PRD says "mean review rounds across the selected scope." Should the control arm be included? Including it would bring the mean down (control has 0 rounds). Excluding it gives a factory-only metric. The wireframe excludes it; the PRD is silent.
+
+**Fix:** Clarify: "Mean review rounds across factory-arm stories in scope (control arm excluded — control dispatches are pre-written and not reviewable)."
+
+---
+
+**m2. Table "sortable by column" over-promises.**
+
+The PRD says "sortable by column" (implying all columns). The wireframe only has sort buttons on 3 of 9 columns: Rounds, Escaped, Wall s. Story, Arm, Coder tok, Non-coder tok, Human min, and Model are not sortable.
+
+**Fix:** Either make all columns sortable in the wireframe (add sort toggles to each `<th>`), or narrow the PRD text to "sortable by rounds, defects, and wall time."
+
+---
+
+**m3. Scope selector options are hardcoded, not data-driven.**
+
+Wireframe shows `["all", "todo-demo", "todo-control", "skel-5"]`. Actual `runs/` directory also contains `prod-1` and `skel-2`. The PRD says "lists all runs/repos present in the ledger data." For a wireframe, hardcoding is acceptable, but the discrepancy means an engineer must know to ignore the hardcoded list and derive from the filesystem at build time.
+
+**Fix:** Add a brief note in the wireframe or PRD: "Scope options are discovered from the directory listing of runs/*/ at build time; the hardcoded list in the wireframe is illustrative only."
+
+---
+
+**m4. No error-state wireframe for corrupt/unreadable files.**
+
+PRD requires: "On unreadable/corrupt file: show a clear error state for that source, never crash." The wireframes have an empty state (`dash-empty`), but no error-state story (e.g., "Error: could not read ledger for run X: parse error at line 42"). Adding one would complete the state coverage.
+
+---
+
+### What is good
+
+- **Read-only invariant** is clear and consistent across PRD, wireframes, and metrics.py conventions. No ambiguity.
+- **'not recorded' never 0** convention is correctly propagated through the wireframes (`fmt` function, null handling).
+- **Warm-paper theme** with light/dark AA contrast is well-executed in the CSS. The color tokens match the factory's existing palette.
+- **Scope empty state** is present and correctly rendered in the wireframe.
+- **PRD faithfully captures the original description's intent** — visibility over factory operations — and adds the appropriate OC-16 overhead-ratio metric without inflating scope.
+- **v1 scope boundaries** (no editing, no live tailing, no auth, no per-dispatch drill-down) are reasonable and well-documented.
+- **Storybook stories** align with the feature list: 5 features + 1 composite = 6 stories. The naming convention (`factory-dashboard--headlines/--table/--trend-views/--scope/--scope-empty/--full`) is clean.
+- **Stack choice** (React + Vite + TypeScript, recharts or hand-rolled SVG) is appropriate for a local dashboard.
+
+---
+
+### Summary
+
+| # | Severity | Concern |
+|---|----------|---------|
+| B1 | BLOCKER | Data-loading mechanism contradictory (browser + no server + local FS read) |
+| B2 | BLOCKER | "Escaped defects" formula undefined (ledger vs findings, escaped_gate vs escaped_review) |
+| M1 | MAJOR | Trends wireframe missing escaped-defects chart |
+| M2 | MAJOR | FullDashboard omits ScopeSelector |
+| M3 | MAJOR | "Cycle time" trends from original description not delivered |
+| M4 | MAJOR | Cost formula undefined for post-price-table future |
+
+**Recommendation:** REQUEST-CHANGES. Fix B1 and B2 before any engineer touches this. M1-M4 should be resolved or explicitly deferred in the PRD's assumptions section. The minor items are documentation polish.
+engineer review wall_s=277
