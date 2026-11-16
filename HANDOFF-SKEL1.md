@@ -1,40 +1,49 @@
-# HANDOFF — SKEL-1/2/3/4 DONE (next is SKEL-5, the last)
+# HANDOFF — v1 WALKING SKELETON COMPLETE (all 5 SKEL items done)
 
 **Updated:** 2026-11-15 · supersedes the work-item table in `HANDOFF.md` §5.
 **Read `HANDOFF.md` first** for cold-start, decisions, board IDs, conventions.
 
-## Where the experiment stands
+## v1 is COMPLETE — all three hypotheses proven end-to-end
 
-- **SKEL-1 (issue #3) DONE — OC-16 GO.** Factory 0 escaped defects vs
-  control 6 (incl. data-loss BLOCKER) at ~3.8× tokens; cost accepted.
-- **SKEL-2 (issue #4) DONE — hypothesis 2 HOLDS (caveat).** Intake CLI +
-  intake-agent role + Storybook wireframes. Engineer persona APPROVE round 2
-  (2 rounds, 226s); caveat: agent not human, real engineer test is follow-up.
-- **SKEL-3 (issue #5) DONE — OC-14 security live + proven (twice).**
-  Validator core + serialized controller-writer workflow + two least-priv
-  Apps (agent 5777949 on todo-demo only; controller 5777982 on
-  software-factory only). Agent can't write state (403); controller sole
-  writer; contention 12×5 zero retries. Proof: scripts/proof-identity.py.
-- **SKEL-4 (issue #6) DONE — OC-15 merge protocol verified on real PR #6.**
-  All 6 checks PASS: stale merge REFUSED (BEHIND), update-before-review,
-  squash tree == reviewed head tree server-side (12c5479aa74a identical),
-  CRLF + rename preserved byte-level. Tooling: factory/merge_protocol.py
-  (is_stale, update_before_review, needs_rereview anti-quadratic,
-  trees_equal alarm-only). Evidence:
-  docs/experiments/skel-4-merge-protocol-2026-11-15.md.
+- **SKEL-1 (#3) DONE — OC-16 GO.** Factory 0 escaped defects vs control 6
+  (incl. data-loss BLOCKER) at ~3.8× tokens; cost accepted for stability +
+  visibility. Evidence: runs/COMPARISON.md.
+- **SKEL-2 (#4) DONE — hypothesis 2 HOLDS (caveat).** Intake CLI + agent
+  role + Storybook wireframes; engineer persona APPROVE round 2 (226s).
+  Caveat: agent not human; real engineer test is the follow-up.
+- **SKEL-3 (#5) DONE — OC-14 security live + proven twice.** controller.py
+  validator + serialized writer workflow + 2 least-priv Apps (agent 5777949
+  todo-demo-only; controller 5777982 software-factory-only). Agent can't
+  write state (403). Proof: scripts/proof-identity.py.
+- **SKEL-4 (#6) DONE — OC-15 merge protocol verified on real PR #6.** Stale
+  refused, squash tree == reviewed head server-side, CRLF+rename preserved.
+  factory/merge_protocol.py.
+- **SKEL-5 (#7) DONE — OC-16 measurement + calibration.** dispatch_audit
+  (11/11 metered), cycle_time_split, risk.py tiering, budget.py controller
+  enforcement, calibration.py + 10-defect fixture + 3-mode experiment
+  (all modes 10/10 salient; cross-family edge is on subtle defects per real
+  SKEL-1 evidence). 223 tests green.
 
-**NEXT WORK: SKEL-5 (issue #7) — measurement + seeded-defect calibration,
-the LAST skeleton item.** Meter every dispatch; seeded-defect reviewer
-catch-rate test (before routing starts); risk-tier the pipeline (small
-stories skip plan review, one reviewer). Read issue #7 + OC-16 before
-scoping. After SKEL-5 the v1 walking skeleton is COMPLETE.
+**NEXT: the north-star vision (post-v1, evidence-gated), OWNER-DIRECTED.**
+Do not start north-star work without an explicit owner decision on what to
+build next. The v1 thesis is proven; the full vision (docs/vision.md §5+)
+returns only when v1 evidence justifies it. Candidate next steps the owner
+may choose: a real (non-demo) product through the factory; the dedicated
+state-repo split (OC-8); cloud adapter (OC-2); merge modes 2/3 + autonomy
+promotion (OC-4/OC-9, data-gated); the SKEL-2 human-engineer follow-up.
 
-- Product repo: `agentmerlin8/factory-todo-demo` (public), main `bd5642e`.
-- Control repo: `agentmerlin8/factory-todo-control` (public), main `f7ac685`.
-- State: software-factory `runs/` + `state/` (v1 decision; OC-8 split later).
-- Intake artifacts: `factory/intake.py`, `process/intake-agent.md`,
-  `templates/wireframes/`, `runs/skel-2/`.
-- Comparison: `runs/COMPARISON.md`. Findings log: `state/findings.jsonl`.
+**Open follow-ups (not blockers):**
+- SKEL-2: real non-owner engineer test of the intake PRD (stronger evidence).
+- Tuning backlog (Randy): shrink the ~3.8× token multiple via agent tuning +
+  token optimizations; baseline = overhead ratio 0.94, TOD-1 11-round case.
+- Findings-log prevention targets: uncovered defect classes + the recurring
+  "remediation introduced its own defect" pattern (3×).
+
+- Product repo: agentmerlin8/factory-todo-demo (public), main bd5642e.
+- Control repo: agentmerlin8/factory-todo-control (public), main f7ac685.
+- State: software-factory runs/ + state/ (v1; OC-8 split later).
+- Evidence: docs/experiments/skel-{2,4,5}-*.md, runs/COMPARISON.md,
+  runs/skel-5/CALIBRATION.md. Findings log: state/findings.jsonl.
 
 ## Story outcomes (factory arm)
 
@@ -105,30 +114,18 @@ Use `.venv/bin/python` (pytest lives there).
    → Auto-approval), UI-only, off by default, dismissed on new commits. Enabled
    on both repos. `requestReviewsByLogin` GraphQL is the re-request that registers.
 
-## Next action: SKEL-5 (measurement + seeded-defect calibration) — the LAST
+## Next action: OWNER DECISION on what to build next (v1 is done)
 
-SKEL-1 (GO), SKEL-2 (intake), SKEL-3 (security), SKEL-4 (merge) are closed.
-Do not re-open them or re-run their arms without an explicit owner request.
-The final skeleton item is **SKEL-5 (issue #7): measurement + seeded-defect
-calibration (OC-16)** — meter every dispatch (tokens/wall/human-min per
-story); seeded-defect reviewer catch-rate test BEFORE routing starts (a
-reviewer that can't catch a known planted defect isn't trusted to route);
-risk-tier the pipeline (small stories skip plan review, use one reviewer).
-Read issue #7 + OC-16 before scoping. After SKEL-5 the v1 walking skeleton
-is COMPLETE — the factory has proven all three hypotheses end-to-end.
-
-**SKEL-2 follow-up (when a human is available):** a real non-owner engineer
-test of the intake PRD — the agent-persona approval is the weaker evidence
-(Randy's decision); the human test is the stronger signal.
-
-**Tuning backlog Randy named (shrink the ~3.8× multiple):** agent tuning +
-forthcoming token optimizations. The overhead ratio (0.94) and the 11-round
-TOD-1 calibration are the baseline to improve against. The findings log's
-uncovered-class list and the recurring "remediation introduced its own
-defect" pattern (3×) are the concrete prevention targets.
+All five SKEL items are closed and the v1 thesis is proven. Do not re-open
+them or re-run their arms without an explicit owner request. The next move
+is the owner's: pick a north-star direction (a real product through the
+factory, the OC-8 state-repo split, cloud adapter, autonomy promotion) or
+a follow-up (SKEL-2 human-engineer test, the token-tuning backlog). The
+full vision in docs/vision.md §5+ is evidence-gated and owner-directed —
+do not start it unprompted.
 
 ## Board
 
-Issues #3 (SKEL-1), #4 (SKEL-2), #5 (SKEL-3), #6 (SKEL-4) Done.
-Issues #8/#9 (EXP-1/2) Done. Issue #7 (SKEL-5) Backlog — the last.
+Issues #3 (SKEL-1), #4 (SKEL-2), #5 (SKEL-3), #6 (SKEL-4), #7 (SKEL-5) Done.
+Issues #8/#9 (EXP-1/2) Done. The v1 board is fully Done.
 Board IDs and the `printf -v` GraphQL pattern are in `HANDOFF.md` §6.
