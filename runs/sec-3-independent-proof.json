@@ -1,0 +1,6 @@
+{
+  "N1_ledger_write": 403,
+  "N2_ref_create": 403,
+  "P1_ctrl_read": 200,
+  "P2_agent_product_write": 201
+}

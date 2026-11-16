@@ -92,6 +92,16 @@ serialized writer.
   `runs/proofs/sec-3-submission.json`) completed success; the state repo gained
   commit `d5d63a7` authored by `factory-controller[bot]` and the ledger went
   119 -> 120 rows with the chain intact.
+- **Independent re-confirmation (second session, 2026-11-15):** controller run
+  43797734014 appended a second probe (ledger 120 -> 121, chain intact, commit
+  `2d0093e` by factory-controller[bot]). Direct API negative proof
+  (`runs/sec-3-independent-proof.json`): agent PUT to the state ledger -> 403,
+  agent create state ref -> 403; controller read state -> 200; agent create
+  product ref -> 201 (cleaned up). `scripts/proof-identity.py` re-run for BOTH
+  identities with correct args -> RESULT: PASS each (agent: push product OK,
+  push state refused; controller: push state OK, push product refused).
+  NOTE on script usage: arg3 = must-fail repo, arg4 = push-target the token
+  SHOULD be able to push (owner/repo form, not a URL).
 
 ## Acceptance (issue #5)
 
