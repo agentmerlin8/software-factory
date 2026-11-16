@@ -118,3 +118,77 @@ def write_comparison(path: Path, factory: dict[str, StoryMetrics],
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_comparison(factory, control), encoding="utf-8")
     return path
+
+
+def dispatch_audit(ledger: Ledger) -> dict:
+    """Fail-closed metering audit (SKEL-5 MEA-1, OC-16).
+
+    Every dispatch_completed that RAN (outcome != 'fail' at launch) must
+    carry tokens (non-zero), model, outcome, and wall_s. A dispatch missing
+    any is an UNMETERED dispatch = a process defect, counted and named.
+
+    Two honest exclusions:
+    - a dispatch that FAILED TO LAUNCH (outcome='fail' with no tokens, e.g.
+      E2BIG at spawn) never consumed tokens — not a metering defect;
+    - tokens recovered by a later `correction` event for the same
+      story/role count as metered (the usage-path-bug recovery pattern).
+    """
+    rows = ledger.read()
+    # corrections that re-attribute usage to a story/role
+    corrected = set()
+    for row in rows:
+        if row.get("event") == "correction":
+            d = row.get("detail") or {}
+            tok = d.get("tokens") or {}
+            if (tok.get("in") or 0) + (tok.get("out") or 0):
+                corrected.add((row.get("story"), row.get("role")))
+    total = 0
+    defects = []
+    for row in rows:
+        if row.get("event") != "dispatch_completed":
+            continue
+        total += 1
+        tok = row.get("tokens") or {}
+        has_tokens = bool((tok.get("in") or 0) + (tok.get("out") or 0))
+        # failed-to-launch: never ran, no tokens expected
+        if row.get("outcome") == "fail" and not has_tokens and not row.get("wall_s"):
+            continue
+        missing = []
+        if not has_tokens and (row.get("story"), row.get("role")) not in corrected:
+            missing.append("tokens")
+        if not row.get("model"):
+            missing.append("model")
+        if not row.get("outcome"):
+            missing.append("outcome")
+        if not row.get("wall_s"):
+            missing.append("wall_s")
+        if missing:
+            defects.append(
+                f"{row.get('story')}/{row.get('role')} @ {row.get('ts')}: "
+                f"missing {', '.join(missing)}")
+    return {"total": total, "metered": total - len(defects),
+            "unmetered": len(defects), "defects": defects}
+
+
+def cycle_time_split(ledger: Ledger) -> dict:
+    """Per-story machine-wall vs human-min split (SKEL-5 MEA-1).
+
+    machine_wall_s = sum of dispatch wall_s; human_min = recorded human
+    attention (dispatch human_min + human_merged human_min). Unrecorded
+    human time is None, never 0 (a missing measurement is not a zero).
+    """
+    out: dict[str, dict] = {}
+    for row in ledger.read():
+        story = row.get("story")
+        if not story:
+            continue
+        s = out.setdefault(story, {"machine_wall_s": 0.0, "human_min": None})
+        if row.get("event") == "dispatch_completed":
+            if row.get("wall_s"):
+                s["machine_wall_s"] += row["wall_s"]
+            if row.get("human_min") is not None:
+                s["human_min"] = (s["human_min"] or 0.0) + row["human_min"]
+        elif row.get("event") == "human_merged":
+            if row.get("human_min") is not None:
+                s["human_min"] = (s["human_min"] or 0.0) + row["human_min"]
+    return out
