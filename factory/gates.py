@@ -171,11 +171,16 @@ def pre_review(workdir: Path, *, base: str, manifest: list[str],
 
     # SEC-GATE: computable security/protocol classes (DSH-1 rounds 1-6).
     # Risk-tiered: network checks activate only on network-surface code.
+    # Test files are skipped — they exercise the server, they aren't it
+    # (DSH-2: test_server.py false-flagged by network-surface detection).
     from .security import security_gate
+    from .pr_size import DiffStat
     sec_failures = []
     sec_network = False
     for m in manifest:
         p = Path(workdir) / m
+        if DiffStat(m, 0, 0).is_test:
+            continue
         if p.suffix in (".py", ".ts", ".js", ".tsx") and p.exists():
             sr = security_gate(p.read_text(encoding="utf-8"))
             sec_network = sec_network or sr.network_surface
