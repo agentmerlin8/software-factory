@@ -10,8 +10,8 @@
    other columns static in v1, per the approved PRD). Clicking a sort header
    toggles ascending/descending; the active sort is indicated (aria-sort);
    sortable headers are real buttons with :focus-visible rings.
-3. Nulls render 'not recorded', never 0 (fmt helper). A recorded zero renders
-   0. Cost is NOT a table column (cost is a headline card only).
+3. Nulls render 'not recorded', never 0 (fmt helper); a recorded zero renders
+   as 0. Cost is NOT a table column (cost is a headline card only).
 4. The table reacts to scope changes (rows = stories in scope). Empty scope
    shows a friendly empty state, not a blank table.
 5. Per-story escaped defects: attribute findings to the story's repo+pr
