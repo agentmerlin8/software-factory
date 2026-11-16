@@ -1,0 +1,27 @@
+{
+  "session_id": "c61b6d2bab46",
+  "description": "A dashboard for the software factory itself: see cycle time, cost, model mix, and defect/review-round trends from the ledger and findings data. The factory builds its own visibility layer.",
+  "status": "prd_ready",
+  "answers": {
+    "platform": "Local web app (browser), read-only over the factory's ledger/findings files. No backend server, no accounts; factory data stays local. Served via a local dev/preview server.",
+    "stack": "React + Vite + TypeScript; Vitest + Testing Library (jsdom). Charts via a lightweight lib (e.g. recharts) or hand-rolled SVG. Reads JSONL ledger + findings files.",
+    "features": [
+      "headline cards",
+      "per-story table",
+      "trend views",
+      "run/repo scope selector"
+    ],
+    "look": "Match the factory's existing warm-paper theme (light + dark, contrast-audited AA). Consistent with the to-do demo palette; calm, readable, charts subordinate to numbers.",
+    "persistence": "READ-ONLY: the dashboard never writes ledger/findings/state. It reads runs/*/ledger.jsonl and state/findings.jsonl from the local filesystem (or a bundled snapshot). No localStorage writes for factory data; UI prefs (selected run/repo) may persist in a separate localStorage key 'factory-dash:prefs'. On unreadable/corrupt file: show a clear error state for that source, never crash, never fabricate numbers (nulls render 'not recorded', per metrics.py convention).",
+    "data_model": "Reads existing schemas, defines no new write model. Ledger row (schema 0): {event, ts, story, role, repo, sha, model, tokens{in,out}, cost_usd, wall_s, human_min, outcome, detail, prev}. Finding row: {ts, repo, pr, round, source, klass, severity, summary, path, head_sha, escaped_gate, escaped_review, verified, disposition, fix_sha, gate_check}. Derived view models: StoryMetrics (coder/noncoder tokens, overhead_ratio, wall_s, human_min, defects, dispatches) and HeadlineSummary (totals across runs).",
+    "acceptance": {
+      "headline cards": "Show total tokens, total cost (or 'not recorded' when cost unknown), total escaped defects, mean review rounds, and process-overhead ratio across the selected scope. Each card renders a real computed number or 'not recorded' — never 0 for missing data. Cards update when scope changes.",
+      "per-story table": "One row per story in scope: story id, arm/run, coder/non-coder tokens, overhead ratio, wall time, human-min (or 'not recorded'), escaped defects, review rounds, model(s). Sortable by column. Nulls render 'not recorded', never 0. Matches factory/metrics.py harvest output.",
+      "trend views": "Charts of review-rounds-per-story and escaped-defects-per-story over the run sequence, plus model-mix breakdown (tokens per model). Charts render from real ledger data; empty scope shows a friendly empty state, not a blank axis. Tooltips show exact values.",
+      "run/repo scope selector": "Selector lists all runs/repos present in the ledger data; default = all. Changing scope recomputes cards/table/trends from that subset only. Selection persists across reload via 'factory-dash:prefs'. Selecting a scope with no data shows the empty state, not stale numbers."
+    },
+    "assumptions": "v1 is READ-ONLY visibility — no editing, no dispatch triggers, no board writes (those are the controller's job, OC-14). 'Cost' is tokens-only until a trusted price table exists (cost_usd often null/0 → render 'not recorded'). The dashboard reads a local snapshot of the ledger; live tailing/websockets are OUT of scope for v1. Per-dispatch drill-down and findings-mining views are deferred (owner chose the middle feature tier). No authentication (local-only)."
+  },
+  "created_at": "2026-11-16T13:36:29Z",
+  "updated_at": "2026-11-16T13:39:07Z"
+}
