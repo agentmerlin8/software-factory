@@ -169,6 +169,21 @@ def pre_review(workdir: Path, *, base: str, manifest: list[str],
     if not mres.ok:
         failures.append(f"boundary_mutants: {mres.verdict}: {mres.detail}")
 
+    # SEC-GATE: computable security/protocol classes (DSH-1 rounds 1-6).
+    # Risk-tiered: network checks activate only on network-surface code.
+    from .security import security_gate
+    sec_failures = []
+    sec_network = False
+    for m in manifest:
+        p = Path(workdir) / m
+        if p.suffix in (".py", ".ts", ".js", ".tsx") and p.exists():
+            sr = security_gate(p.read_text(encoding="utf-8"))
+            sec_network = sec_network or sr.network_surface
+            sec_failures.extend(f"{m}: {f}" for f in sr.failures)
+    checks["security"] = not sec_failures
+    if sec_failures:
+        failures.append(f"security: {'; '.join(sec_failures)}")
+
     if any(m.endswith(".css") for m in manifest):
         ok, detail = check_contrast(workdir)
         checks["contrast"] = ok
