@@ -1,6 +1,7 @@
 # SKEL-3 plan — Controller-writer security (issue #5, OC-14)
 
-**Status:** draft for owner review · **Date:** 2026-11-15
+**Status:** SEC-1/SEC-2/SEC-3 implemented (2026-11-15) — identity pair live and
+proven end-to-end; awaiting owner review of slice 3 · **Date:** 2026-11-15
 **Threat model:** a model-driven job (or injected content inside one) must
 never be able to write the state repo. Security must NOT depend on branch
 protection (works on Free; protection is defense-in-depth now that repos
@@ -13,7 +14,16 @@ serialized writer.
   installed on ALL org repos. Used for board sync + MIE. **Too broad to be
   the agent identity for state-repo security** — it can write everything.
 - `entire` (app 2626939): checks/contents/workflows/PRs write + admin read.
-- No dedicated agent/controller pair exists yet.
+- **Pair created 2026-11-15** (org-owned, manifest flow):
+  `agentmerlin8-factory-agent` (app 5777949; contents/PR write, metadata read;
+  install selection=selected, ONLY factory-todo-demo) and
+  `agentmerlin8-factory-controller` (app 5777982; contents/checks write,
+  metadata read; install selection=selected, ONLY software-factory).
+  Secrets wired stdin-only: `CONTROLLER_APP_ID` + `CONTROLLER_PEM` on the state
+  repo. Product-repo agent secrets (`AGENT_APP_ID`/`AGENT_PEM`) land with the
+  first agent workflow — factory-todo-demo has none yet.
+- Names: `factory-agent` / `factory-controller` were globally taken, hence the
+  `agentmerlin8-` prefix. Code keys off the App ID, not the name.
 
 ## Design (v1 minimum)
 
@@ -63,11 +73,32 @@ serialized writer.
   mint an agent token, attempt a state-repo push → must fail (403/404).
   POSITIVE: controller token appends via the workflow. Evidence recorded.
 
+## SEC-3 evidence (executed 2026-11-15)
+
+- Agent token scope from a real installation token: `['agentmerlin8/factory-todo-demo']`
+  (total_count 1, selection=selected).
+- Negative, write path: `git push --dry-run` to software-factory -> HTTP 403;
+  `POST /git/refs` -> 403 "Resource not accessible by integration".
+  Positive control: read of factory-todo-demo -> 200.
+- Nuance: the state repo is PUBLIC, so the agent token can READ it (any token
+  can). The isolation we rely on is on WRITES — which is what the ledger needs.
+  `--dry-run` authenticates and negotiates with the server but writes nothing,
+  so it is the safe way to prove a write decision.
+- Controller token scope: `['agentmerlin8/software-factory']`; `git push
+  --dry-run` to the state repo accepted (rc 0); push to the product repo
+  refused.
+- Positive end-to-end: `controller-writer` run 43797143412 (workflow_dispatch,
+  submission hosted in the product repo at
+  `runs/proofs/sec-3-submission.json`) completed success; the state repo gained
+  commit `d5d63a7` authored by `factory-controller[bot]` and the ledger went
+  119 -> 120 rows with the chain intact.
+
 ## Acceptance (issue #5)
 
-- [ ] agent cannot write the state repo directly (negative proof)
-- [ ] controller is the sole state-repo writer (workflow + identity map)
-- [ ] contention test: parallel writers, no exhausted retries
+- [x] agent cannot write the state repo directly (negative proof above)
+- [x] controller is the sole state-repo writer (workflow + identity map)
+- [x] contention test: parallel writers, no exhausted retries (SEC-2 local
+      harness: 12 writers x 5 events, all 60 land, chain intact, zero retries)
 
 ## Owner touchpoints (cannot be automated)
 
