@@ -1,4 +1,4 @@
-# HANDOFF — SKEL-1/2/3 DONE (next is SKEL-4)
+# HANDOFF — SKEL-1/2/3/4 DONE (next is SKEL-5, the last)
 
 **Updated:** 2026-11-15 · supersedes the work-item table in `HANDOFF.md` §5.
 **Read `HANDOFF.md` first** for cold-start, decisions, board IDs, conventions.
@@ -10,24 +10,26 @@
 - **SKEL-2 (issue #4) DONE — hypothesis 2 HOLDS (caveat).** Intake CLI +
   intake-agent role + Storybook wireframes. Engineer persona APPROVE round 2
   (2 rounds, 226s); caveat: agent not human, real engineer test is follow-up.
-- **SKEL-3 (issue #5) DONE — OC-14 security model live + proven (twice).**
-  Validator core (`factory/controller.py`), serialized controller-writer
-  workflow, two least-privilege Apps: `agentmerlin8-factory-agent` (5777949,
-  factory-todo-demo only) + `agentmerlin8-factory-controller` (5777982,
-  software-factory only). Agent CANNOT write state (403 on ledger PUT + ref
-  create); controller is sole writer (2 live runs, ledger 119→121, chain
-  intact); contention test 12×5 all land, zero retries. Proof script:
-  `scripts/proof-identity.py` (arg3=must-fail repo, arg4=push-target,
-  owner/repo form). Evidence: `docs/plans/skel-3-controller-writer.md`.
+- **SKEL-3 (issue #5) DONE — OC-14 security live + proven (twice).**
+  Validator core + serialized controller-writer workflow + two least-priv
+  Apps (agent 5777949 on todo-demo only; controller 5777982 on
+  software-factory only). Agent can't write state (403); controller sole
+  writer; contention 12×5 zero retries. Proof: scripts/proof-identity.py.
+- **SKEL-4 (issue #6) DONE — OC-15 merge protocol verified on real PR #6.**
+  All 6 checks PASS: stale merge REFUSED (BEHIND), update-before-review,
+  squash tree == reviewed head tree server-side (12c5479aa74a identical),
+  CRLF + rename preserved byte-level. Tooling: factory/merge_protocol.py
+  (is_stale, update_before_review, needs_rereview anti-quadratic,
+  trees_equal alarm-only). Evidence:
+  docs/experiments/skel-4-merge-protocol-2026-11-15.md.
 
-**NEXT WORK: SKEL-4 (issue #6) — merge protocol (OC-15).** Update-before-
-review + strict up-to-date; squash tree == reviewed head by construction;
-post-merge tree compare as ALARM only; re-review only when the story diff
-changed or main's delta touches its manifest. VERIFY on one real PR (rename
-+ line-ending case). EXP-1/2/3 already verified the strict gate mechanics.
-Read issue #6 + OC-15 before scoping.
+**NEXT WORK: SKEL-5 (issue #7) — measurement + seeded-defect calibration,
+the LAST skeleton item.** Meter every dispatch; seeded-defect reviewer
+catch-rate test (before routing starts); risk-tier the pipeline (small
+stories skip plan review, one reviewer). Read issue #7 + OC-16 before
+scoping. After SKEL-5 the v1 walking skeleton is COMPLETE.
 
-- Product repo: `agentmerlin8/factory-todo-demo` (public), main `0759dae`.
+- Product repo: `agentmerlin8/factory-todo-demo` (public), main `bd5642e`.
 - Control repo: `agentmerlin8/factory-todo-control` (public), main `f7ac685`.
 - State: software-factory `runs/` + `state/` (v1 decision; OC-8 split later).
 - Intake artifacts: `factory/intake.py`, `process/intake-agent.md`,
@@ -103,19 +105,17 @@ Use `.venv/bin/python` (pytest lives there).
    → Auto-approval), UI-only, off by default, dismissed on new commits. Enabled
    on both repos. `requestReviewsByLogin` GraphQL is the re-request that registers.
 
-## Next action: SKEL-4 (merge protocol)
+## Next action: SKEL-5 (measurement + seeded-defect calibration) — the LAST
 
-SKEL-1 (GO), SKEL-2 (intake), and SKEL-3 (security) are closed. Do not
-re-open them or re-run their arms without an explicit owner request. The
-next skeleton item is **SKEL-4 (issue #6): merge protocol (OC-15)** —
-update-before-review + strict up-to-date; squash tree == reviewed head by
-construction; post-merge tree compare as ALARM only (no auto-revert); red
-main → block dispatches + prepared revert PR in the inbox; re-review only
-when the story's diff changed or main's delta touches its manifest. VERIFY
-on one real PR (rename + line-ending case). EXP-1/2/3 already verified the
-strict-gate mechanics on public+Free. Read issue #6 + OC-15 before scoping.
-Same discipline: fresh run chat, repo is the state, slice law (OC-17
-sizing), Copilot approval + human merge.
+SKEL-1 (GO), SKEL-2 (intake), SKEL-3 (security), SKEL-4 (merge) are closed.
+Do not re-open them or re-run their arms without an explicit owner request.
+The final skeleton item is **SKEL-5 (issue #7): measurement + seeded-defect
+calibration (OC-16)** — meter every dispatch (tokens/wall/human-min per
+story); seeded-defect reviewer catch-rate test BEFORE routing starts (a
+reviewer that can't catch a known planted defect isn't trusted to route);
+risk-tier the pipeline (small stories skip plan review, use one reviewer).
+Read issue #7 + OC-16 before scoping. After SKEL-5 the v1 walking skeleton
+is COMPLETE — the factory has proven all three hypotheses end-to-end.
 
 **SKEL-2 follow-up (when a human is available):** a real non-owner engineer
 test of the intake PRD — the agent-persona approval is the weaker evidence
@@ -129,6 +129,6 @@ defect" pattern (3×) are the concrete prevention targets.
 
 ## Board
 
-Issues #3 (SKEL-1), #4 (SKEL-2), #5 (SKEL-3) Done (Status=Done, Stage=Done).
-Issues #8/#9 (EXP-1/2) Done. Issues #6/#7 (SKEL-4/5) Backlog.
+Issues #3 (SKEL-1), #4 (SKEL-2), #5 (SKEL-3), #6 (SKEL-4) Done.
+Issues #8/#9 (EXP-1/2) Done. Issue #7 (SKEL-5) Backlog — the last.
 Board IDs and the `printf -v` GraphQL pattern are in `HANDOFF.md` §6.
