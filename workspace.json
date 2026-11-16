@@ -1,1 +1,5 @@
-{"copilot_review": "off", "human_merge": true, "_note": "Randy 2026-11-16: no auto Copilot reviews; the factory's own gates + cross-family review are the gate. Copilot review is a per-workspace lever (OC-9), not a platform dependency. OC-17's blanket requirement is scoped to todo-demo only."}
+{
+  "copilot_review": "required",
+  "human_merge": true,
+  "_note": "Randy 2026-11-16 (standing directive): when you create a PR, ALWAYS request the Copilot review and monitor it. Supersedes the earlier 'off' setting. Request + monitor to convergence; disposition every finding by execution; adjudicate vague human-assessment claims by probe."
+}
