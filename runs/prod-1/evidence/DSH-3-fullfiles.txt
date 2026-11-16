@@ -1,0 +1,219 @@
+// DSH-3 headline cards — wireframe structure/classes wired to DSH-2's
+// aggregate functions (formulas single-sourced, AC 1). Missing data renders
+// 'not recorded', never 0; cost 0/null is unknown (AC 2, costDisplay).
+import { headlineOverhead, meanReviewRounds } from '../data/metrics';
+import { costDisplay, fmt } from '../data/format';
+import type { StoryMetrics } from '../data/types';
+
+interface Props {
+  stories: StoryMetrics[];
+  /** null when the findings source failed — unknown, not 0. */
+  escapedDefects: number | null;
+  sub?: string;
+}
+
+export default function HeadlineCards({ stories, escapedDefects, sub }: Props) {
+  const totalTokens = stories.reduce((sum, s) => sum + s.coderTokens + s.noncoderTokens, 0);
+  // Zero tokens is only real when usage was actually recorded.
+  const tokensRecorded = totalTokens > 0 || stories.some((s) => s.dispatches > 0);
+  const costs = stories.map((s) => s.costUsd).filter((c): c is number => c != null);
+  const totalCost = costs.length > 0 ? costs.reduce((sum, c) => sum + c, 0) : null;
+  const cards = [
+    { label: 'Total tokens', value: tokensRecorded ? fmt(totalTokens) : 'not recorded' },
+    { label: 'Cost (USD)', value: costDisplay(totalCost) },
+    { label: 'Escaped defects', value: fmt(escapedDefects) },
+    { label: 'Mean review rounds', value: fmt(meanReviewRounds(stories)) },
+    { label: 'Overhead ratio', value: fmt(headlineOverhead(stories)) },
+  ];
+  return (
+    <div className="dash-card">
+      <h1 className="dash-title">Factory dashboard</h1>
+      {sub ? <p className="dash-sub">{sub}</p> : null}
+      <div className="dash-cards">
+        {cards.map((c) => (
+          <div key={c.label} className="dash-stat">
+            <span className="dash-stat-label">{c.label}</span>
+            <span className="dash-stat-value">{c.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+// DSH-3 scope selector — wireframe structure/classes; options are the runs
+// discovered from GET /api/runs (passed in), never hardcoded (AC 3).
+import { ALL } from '../data/metrics';
+
+interface Props {
+  runs: string[];
+  value: string;
+  onChange: (run: string) => void;
+}
+
+export default function ScopeSelector({ runs, value, onChange }: Props) {
+  return (
+    <div className="dash-card">
+      <h2 className="dash-title">Scope</h2>
+      <div className="dash-filters" role="group" aria-label="Select run scope">
+        {[ALL, ...runs].map((run) => (
+          <button
+            key={run}
+            className="dash-filter"
+            aria-pressed={value === run}
+            onClick={() => onChange(run)}
+          >
+            {run}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+// DSH-3 data hook — orchestrates DSH-2's fetch functions (no reimplementation):
+// discover runs, load every run's ledger + findings. Per-source errors are
+// collected as typed strings; a failed source never crashes the others.
+import { useEffect, useState } from 'react';
+import { fetchFindings, fetchLedger, fetchRuns } from '../data/api';
+import type { FindingRow, RunLedger } from '../data/types';
+
+export interface DashboardData {
+  loading: boolean;
+  runs: string[];
+  ledgers: RunLedger[];
+  /** null when the findings source failed — escaped defects are unknown. */
+  findings: FindingRow[] | null;
+  errors: string[];
+}
+
+export function useDashboardData(): DashboardData {
+  const [data, setData] = useState<DashboardData>({
+    loading: true, runs: [], ledgers: [], findings: null, errors: [],
+  });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const runsRes = await fetchRuns();
+      if (cancelled) return;
+      if ('error' in runsRes) {
+        setData({ loading: false, runs: [], ledgers: [], findings: null, errors: [runsRes.error] });
+        return;
+      }
+      const runs = runsRes.rows;
+      const [findingsRes, ...ledgerRes] = await Promise.all([
+        fetchFindings(),
+        ...runs.map((run) => fetchLedger(run)),
+      ]);
+      if (cancelled) return;
+      const errors: string[] = [];
+      const ledgers: RunLedger[] = [];
+      runs.forEach((run, i) => {
+        const res = ledgerRes[i];
+        if ('error' in res) errors.push(res.error);
+        else ledgers.push({ run, rows: res.rows });
+      });
+      let findings: FindingRow[] | null = null;
+      if ('error' in findingsRes) errors.push(findingsRes.error);
+      else findings = findingsRes.rows;
+      setData({ loading: false, runs, ledgers, findings, errors });
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  return data;
+}
+// DSH-2 formatting — null renders 'not recorded', never 0 (a missing
+// measurement is not a zero measurement). Mirrors metrics.py _fmt.
+
+export function fmt(value: number | null | undefined): string {
+  if (value === null || value === undefined) return 'not recorded';
+  // Defense-in-depth: non-finite values render 'not recorded' too (DSH-2
+  // review FINDING-2). The data layer already guarantees finite-or-null,
+  // but fmt is the last line before display.
+  if (!Number.isFinite(value)) return 'not recorded';
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2);
+}
+
+// DSH-3 AC 2: cost is tokens-only until a price table exists — a recorded
+// 0 is "unknown", not a free run (wall_s zero, by contrast, IS real).
+export function costDisplay(costUsd: number | null | undefined): string {
+  if (costUsd === null || costUsd === undefined || costUsd === 0) return 'not recorded';
+  if (!Number.isFinite(costUsd)) return 'not recorded';
+  return costUsd.toFixed(2);
+}
+/// <reference types="vite/client" />
+// DSH-3 composite — scope selector ABOVE the data views; all views recompute
+// from the selected run subset (AC 3). Prefs persist in 'factory-dash:prefs'
+// (AC 4); empty scope and per-source errors get their own states (AC 5).
+import { useMemo, useState } from 'react';
+import './index.css';
+import HeadlineCards from './components/HeadlineCards';
+import ScopeSelector from './components/ScopeSelector';
+import { useDashboardData } from './hooks/useDashboardData';
+import { ALL, escapedDefectsByRepo, harvestStories, selectRuns } from './data/metrics';
+
+const PREFS_KEY = 'factory-dash:prefs';
+
+function loadScope(): string {
+  try {
+    const prefs = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}');
+    return typeof prefs?.run === 'string' ? prefs.run : ALL;
+  } catch {
+    return ALL;
+  }
+}
+
+export default function App() {
+  const { loading, runs, ledgers, findings, errors } = useDashboardData();
+  const [scope, setScope] = useState<string>(loadScope);
+
+  const changeScope = (run: string) => {
+    setScope(run);
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ run }));
+    } catch { /* prefs are best-effort; the view still works */ }
+  };
+
+  const stories = useMemo(
+    () => harvestStories(selectRuns(ledgers, scope), findings ?? []),
+    [ledgers, scope, findings],
+  );
+  // Escaped defects are per-repo (PRD formula 1); attribute them to the
+  // repos present in the selected run scope. Unknown when findings failed.
+  const escapedDefects = useMemo(() => {
+    if (findings === null) return null;
+    const byRepo = escapedDefectsByRepo(findings);
+    if (scope === ALL) return Object.values(byRepo).reduce((sum, n) => sum + n, 0);
+    const repos = new Set(stories.map((s) => s.repo).filter((r): r is string => r != null));
+    let total = 0;
+    for (const repo of repos) total += byRepo[repo] ?? 0;
+    return total;
+  }, [findings, scope, stories]);
+
+  return (
+    <div>
+      <ScopeSelector runs={runs} value={scope} onChange={changeScope} />
+      {errors.length > 0 && (
+        <div className="dash-card">
+          <div className="dash-error" role="alert">
+            <strong>Could not read a data source.</strong>
+            {errors.map((e) => <p key={e}>{e}</p>)}
+          </div>
+        </div>
+      )}
+      {loading ? (
+        <div className="dash-card"><p className="dash-empty">Loading factory data…</p></div>
+      ) : stories.length === 0 ? (
+        <div className="dash-card">
+          <h1 className="dash-title">Factory dashboard</h1>
+          <p className="dash-empty">No story data in this scope yet.</p>
+        </div>
+      ) : (
+        <HeadlineCards
+          stories={stories}
+          escapedDefects={escapedDefects}
+          sub={scope === ALL ? 'All runs' : scope}
+        />
+      )}
+    </div>
+  );
+}

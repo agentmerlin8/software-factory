@@ -1,0 +1,594 @@
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+index 6ad2758..11f0ac3 100644
+--- a/src/App.test.tsx
++++ b/src/App.test.tsx
+@@ -1,9 +1,105 @@
+-import { describe, it, expect } from 'vitest';
+-import { render, screen } from '@testing-library/react';
++// DSH-3 composite — selector ABOVE cards, options discovered from /api/runs,
++// scope change recomputes cards, prefs persist, empty/error states (AC 3-5).
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+ import App from './App';
+-describe('scaffold', () => {
+-  it('renders the dashboard heading', () => {
++import { controlRun, factoryRun, findings } from './data/fixtures';
++
++function routeFetch(overrides: Record<string, unknown> = {}) {
++  const table: Record<string, unknown> = {
++    '/api/runs': ['demo-run', 'control-run', 'empty-run'],
++    '/api/ledger?run=demo-run': factoryRun.rows,
++    '/api/ledger?run=control-run': controlRun.rows,
++    '/api/ledger?run=empty-run': [],
++    '/api/findings': findings,
++    ...overrides,
++  };
++  return vi.fn(async (url: string) => new Response(
++    JSON.stringify(table[url] ?? { error: url + ': no such source' }),
++    { status: 200, headers: { 'Content-Type': 'application/json' } },
++  ));
++}
++
++function cardValue(label: string): string {
++  return screen.getByText(label).nextElementSibling?.textContent ?? '';
++}
++
++async function loaded() {
++  await waitFor(() => expect(screen.getByRole('button', { name: 'demo-run' })).toBeInTheDocument());
++}
++
++beforeEach(() => localStorage.clear());
++afterEach(() => vi.unstubAllGlobals());
++
++describe('App composite', () => {
++  it('discovers scope options from /api/runs and shows all-scope aggregates', async () => {
++    vi.stubGlobal('fetch', routeFetch());
+     render(<App />);
++    await loaded();
+     expect(screen.getByRole('heading', { name: /factory dashboard/i })).toBeInTheDocument();
++    expect(screen.getByRole('button', { name: 'empty-run' })).toBeInTheDocument();
++    expect(screen.getByRole('button', { name: 'all' })).toHaveAttribute('aria-pressed', 'true');
++    expect(cardValue('Total tokens')).toBe('1565');
++    expect(cardValue('Escaped defects')).toBe('3');
++    expect(cardValue('Mean review rounds')).toBe('3.50');
++    expect(cardValue('Overhead ratio')).toBe('0.34');
++    expect(cardValue('Cost (USD)')).toBe('not recorded');
++  });
++
++  it('recomputes cards when scope changes', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    fireEvent.click(screen.getByRole('button', { name: 'demo-run' }));
++    expect(cardValue('Total tokens')).toBe('565');
++    expect(cardValue('Escaped defects')).toBe('2');
++    expect(cardValue('Overhead ratio')).toBe('2.42');
++    fireEvent.click(screen.getByRole('button', { name: 'control-run' }));
++    expect(cardValue('Total tokens')).toBe('1000');
++    expect(cardValue('Escaped defects')).toBe('1');
++    expect(cardValue('Mean review rounds')).toBe('not recorded');
++  });
++
++  it('persists scope across reload via factory-dash:prefs', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    const first = render(<App />);
++    await loaded();
++    fireEvent.click(screen.getByRole('button', { name: 'control-run' }));
++    expect(JSON.parse(localStorage.getItem('factory-dash:prefs') ?? '{}')).toEqual({ run: 'control-run' });
++    first.unmount();
++    render(<App />);
++    await loaded();
++    expect(screen.getByRole('button', { name: 'control-run' })).toHaveAttribute('aria-pressed', 'true');
++    expect(cardValue('Total tokens')).toBe('1000');
++  });
++
++  it('ignores corrupt prefs and defaults to all', async () => {
++    localStorage.setItem('factory-dash:prefs', '{not json');
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    expect(screen.getByRole('button', { name: 'all' })).toHaveAttribute('aria-pressed', 'true');
++  });
++
++  it('shows a friendly empty state for a scope with no data, not stale numbers', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    fireEvent.click(screen.getByRole('button', { name: 'empty-run' }));
++    expect(screen.getByText(/no story data in this scope/i)).toBeInTheDocument();
++    expect(screen.queryByText('Total tokens')).not.toBeInTheDocument();
++  });
++
++  it('shows a per-source error state (file + reason) without crashing', async () => {
++    vi.stubGlobal('fetch', routeFetch({
++      '/api/findings': { error: 'state/findings.jsonl: permission denied' },
++    }));
++    render(<App />);
++    await loaded();
++    const alert = screen.getByRole('alert');
++    expect(alert).toHaveTextContent('state/findings.jsonl: permission denied');
++    // Other sources still render; escaped defects unknown, never fabricated.
++    expect(cardValue('Total tokens')).toBe('1565');
++    expect(cardValue('Escaped defects')).toBe('not recorded');
+   });
+ });
+diff --git a/src/App.tsx b/src/App.tsx
+index 47f59f5..f280c80 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,3 +1,77 @@
++/// <reference types="vite/client" />
++// DSH-3 composite — scope selector ABOVE the data views; all views recompute
++// from the selected run subset (AC 3). Prefs persist in 'factory-dash:prefs'
++// (AC 4); empty scope and per-source errors get their own states (AC 5).
++import { useMemo, useState } from 'react';
++import './index.css';
++import HeadlineCards from './components/HeadlineCards';
++import ScopeSelector from './components/ScopeSelector';
++import { useDashboardData } from './hooks/useDashboardData';
++import { ALL, escapedDefectsByRepo, harvestStories, selectRuns } from './data/metrics';
++
++const PREFS_KEY = 'factory-dash:prefs';
++
++function loadScope(): string {
++  try {
++    const prefs = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}');
++    return typeof prefs?.run === 'string' ? prefs.run : ALL;
++  } catch {
++    return ALL;
++  }
++}
++
+ export default function App() {
+-  return <h1>Factory Dashboard</h1>;
++  const { loading, runs, ledgers, findings, errors } = useDashboardData();
++  const [scope, setScope] = useState<string>(loadScope);
++
++  const changeScope = (run: string) => {
++    setScope(run);
++    try {
++      localStorage.setItem(PREFS_KEY, JSON.stringify({ run }));
++    } catch { /* prefs are best-effort; the view still works */ }
++  };
++
++  const stories = useMemo(
++    () => harvestStories(selectRuns(ledgers, scope), findings ?? []),
++    [ledgers, scope, findings],
++  );
++  // Escaped defects are per-repo (PRD formula 1); attribute them to the
++  // repos present in the selected run scope. Unknown when findings failed.
++  const escapedDefects = useMemo(() => {
++    if (findings === null) return null;
++    const byRepo = escapedDefectsByRepo(findings);
++    if (scope === ALL) return Object.values(byRepo).reduce((sum, n) => sum + n, 0);
++    const repos = new Set(stories.map((s) => s.repo).filter((r): r is string => r != null));
++    let total = 0;
++    for (const repo of repos) total += byRepo[repo] ?? 0;
++    return total;
++  }, [findings, scope, stories]);
++
++  return (
++    <div>
++      <ScopeSelector runs={runs} value={scope} onChange={changeScope} />
++      {errors.length > 0 && (
++        <div className="dash-card">
++          <div className="dash-error" role="alert">
++            <strong>Could not read a data source.</strong>
++            {errors.map((e) => <p key={e}>{e}</p>)}
++          </div>
++        </div>
++      )}
++      {loading ? (
++        <div className="dash-card"><p className="dash-empty">Loading factory data…</p></div>
++      ) : stories.length === 0 ? (
++        <div className="dash-card">
++          <h1 className="dash-title">Factory dashboard</h1>
++          <p className="dash-empty">No story data in this scope yet.</p>
++        </div>
++      ) : (
++        <HeadlineCards
++          stories={stories}
++          escapedDefects={escapedDefects}
++          sub={scope === ALL ? 'All runs' : scope}
++        />
++      )}
++    </div>
++  );
+ }
+diff --git a/src/components/HeadlineCards.test.tsx b/src/components/HeadlineCards.test.tsx
+new file mode 100644
+index 0000000..ff4b034
+--- /dev/null
++++ b/src/components/HeadlineCards.test.tsx
+@@ -0,0 +1,80 @@
++// DSH-3 headline cards — computed aggregates from DSH-2 metrics, missing
++// data renders 'not recorded' (never 0), cost 0/null is unknown (AC 1/2).
++import { describe, expect, it } from 'vitest';
++import { render, screen } from '@testing-library/react';
++import HeadlineCards from './HeadlineCards';
++import { harvestStories } from '../data/metrics';
++import { allRuns, findings } from '../data/fixtures';
++import { costDisplay } from '../data/format';
++import type { StoryMetrics } from '../data/types';
++
++function cardValue(label: string): string {
++  return screen.getByText(label).nextElementSibling?.textContent ?? '';
++}
++
++function story(partial: Partial<StoryMetrics>): StoryMetrics {
++  return {
++    story: 'STY-X', run: 'r', arm: 'factory', repo: 'x/y',
++    coderTokens: 0, noncoderTokens: 0, overheadRatio: null,
++    wallS: null, humanMin: null, costUsd: null,
++    dispatches: 0, inLoopDefects: 0, rounds: null, ...partial,
++  };
++}
++
++describe('costDisplay (AC 2: cost is tokens-only until a price table)', () => {
++  it('renders null, undefined and 0 as not recorded', () => {
++    expect(costDisplay(null)).toBe('not recorded');
++    expect(costDisplay(undefined)).toBe('not recorded');
++    expect(costDisplay(0)).toBe('not recorded');
++  });
++  it('renders a nonzero cost to 2 decimals', () => {
++    expect(costDisplay(1.5)).toBe('1.50');
++    expect(costDisplay(2)).toBe('2.00');
++    expect(costDisplay(3.456)).toBe('3.46');
++  });
++  it('renders non-finite values as not recorded', () => {
++    expect(costDisplay(NaN)).toBe('not recorded');
++    expect(costDisplay(Infinity)).toBe('not recorded');
++  });
++});
++
++describe('HeadlineCards', () => {
++  it('renders computed aggregates over the full fixture scope', () => {
++    render(<HeadlineCards stories={harvestStories(allRuns, findings)} escapedDefects={3} />);
++    expect(cardValue('Total tokens')).toBe('1565');
++    // STY-A's only recorded cost is a 0 correction -> unknown, not $0.00.
++    expect(cardValue('Cost (USD)')).toBe('not recorded');
++    expect(cardValue('Escaped defects')).toBe('3');
++    expect(cardValue('Mean review rounds')).toBe('3.50');
++    expect(cardValue('Overhead ratio')).toBe('0.34');
++  });
++
++  it('renders missing data as not recorded, never 0', () => {
++    // STY-B: reviewer-only (coder 0 -> overhead null), no cost recorded.
++    const stories = harvestStories(allRuns, findings).filter((s) => s.story === 'STY-B');
++    render(<HeadlineCards stories={stories} escapedDefects={null} />);
++    expect(cardValue('Cost (USD)')).toBe('not recorded');
++    expect(cardValue('Escaped defects')).toBe('not recorded');
++    expect(cardValue('Overhead ratio')).toBe('not recorded');
++    expect(cardValue('Mean review rounds')).toBe('4');
++  });
++
++  it('excludes control-arm stories from mean review rounds', () => {
++    const stories = harvestStories(allRuns, findings).filter((s) => s.arm === 'control');
++    render(<HeadlineCards stories={stories} escapedDefects={1} />);
++    expect(cardValue('Mean review rounds')).toBe('not recorded');
++  });
++
++  it('renders a nonzero aggregate cost to 2 decimals', () => {
++    const stories = [story({ costUsd: 1.25 }), story({ story: 'STY-Y', costUsd: 2.2 })];
++    render(<HeadlineCards stories={stories} escapedDefects={0} />);
++    expect(cardValue('Cost (USD)')).toBe('3.45');
++    // Zero escaped defects IS a real count when findings loaded fine.
++    expect(cardValue('Escaped defects')).toBe('0');
++  });
++
++  it('renders total tokens as not recorded when no usage was recorded', () => {
++    render(<HeadlineCards stories={[story({})]} escapedDefects={0} />);
++    expect(cardValue('Total tokens')).toBe('not recorded');
++  });
++});
+diff --git a/src/components/HeadlineCards.tsx b/src/components/HeadlineCards.tsx
+new file mode 100644
+index 0000000..fa05b54
+--- /dev/null
++++ b/src/components/HeadlineCards.tsx
+@@ -0,0 +1,42 @@
++// DSH-3 headline cards — wireframe structure/classes wired to DSH-2's
++// aggregate functions (formulas single-sourced, AC 1). Missing data renders
++// 'not recorded', never 0; cost 0/null is unknown (AC 2, costDisplay).
++import { headlineOverhead, meanReviewRounds } from '../data/metrics';
++import { costDisplay, fmt } from '../data/format';
++import type { StoryMetrics } from '../data/types';
++
++interface Props {
++  stories: StoryMetrics[];
++  /** null when the findings source failed — unknown, not 0. */
++  escapedDefects: number | null;
++  sub?: string;
++}
++
++export default function HeadlineCards({ stories, escapedDefects, sub }: Props) {
++  const totalTokens = stories.reduce((sum, s) => sum + s.coderTokens + s.noncoderTokens, 0);
++  // Zero tokens is only real when usage was actually recorded.
++  const tokensRecorded = totalTokens > 0 || stories.some((s) => s.dispatches > 0);
++  const costs = stories.map((s) => s.costUsd).filter((c): c is number => c != null);
++  const totalCost = costs.length > 0 ? costs.reduce((sum, c) => sum + c, 0) : null;
++  const cards = [
++    { label: 'Total tokens', value: tokensRecorded ? fmt(totalTokens) : 'not recorded' },
++    { label: 'Cost (USD)', value: costDisplay(totalCost) },
++    { label: 'Escaped defects', value: fmt(escapedDefects) },
++    { label: 'Mean review rounds', value: fmt(meanReviewRounds(stories)) },
++    { label: 'Overhead ratio', value: fmt(headlineOverhead(stories)) },
++  ];
++  return (
++    <div className="dash-card">
++      <h1 className="dash-title">Factory dashboard</h1>
++      {sub ? <p className="dash-sub">{sub}</p> : null}
++      <div className="dash-cards">
++        {cards.map((c) => (
++          <div key={c.label} className="dash-stat">
++            <span className="dash-stat-label">{c.label}</span>
++            <span className="dash-stat-value">{c.value}</span>
++          </div>
++        ))}
++      </div>
++    </div>
++  );
++}
+diff --git a/src/components/ScopeSelector.test.tsx b/src/components/ScopeSelector.test.tsx
+new file mode 100644
+index 0000000..8677e34
+--- /dev/null
++++ b/src/components/ScopeSelector.test.tsx
+@@ -0,0 +1,31 @@
++// DSH-3 scope selector — options are the discovered runs (props), default
++// 'all', aria-pressed state, onChange fires with the run id (AC 3/6).
++import { describe, expect, it, vi } from 'vitest';
++import { fireEvent, render, screen } from '@testing-library/react';
++import ScopeSelector from './ScopeSelector';
++
++describe('ScopeSelector', () => {
++  it('renders all plus the discovered runs as pressed-state buttons', () => {
++    render(<ScopeSelector runs={['demo-run', 'control-run']} value="all" onChange={() => {}} />);
++    const group = screen.getByRole('group', { name: /select run scope/i });
++    expect(group).toBeInTheDocument();
++    expect(screen.getByRole('button', { name: 'all' })).toHaveAttribute('aria-pressed', 'true');
++    expect(screen.getByRole('button', { name: 'demo-run' })).toHaveAttribute('aria-pressed', 'false');
++    expect(screen.getByRole('button', { name: 'control-run' })).toHaveAttribute('aria-pressed', 'false');
++  });
++
++  it('marks the selected run as pressed', () => {
++    render(<ScopeSelector runs={['demo-run']} value="demo-run" onChange={() => {}} />);
++    expect(screen.getByRole('button', { name: 'demo-run' })).toHaveAttribute('aria-pressed', 'true');
++    expect(screen.getByRole('button', { name: 'all' })).toHaveAttribute('aria-pressed', 'false');
++  });
++
++  it('calls onChange with the clicked run id', () => {
++    const onChange = vi.fn();
++    render(<ScopeSelector runs={['demo-run', 'control-run']} value="all" onChange={onChange} />);
++    fireEvent.click(screen.getByRole('button', { name: 'control-run' }));
++    expect(onChange).toHaveBeenCalledWith('control-run');
++    fireEvent.click(screen.getByRole('button', { name: 'all' }));
++    expect(onChange).toHaveBeenCalledWith('all');
++  });
++});
+diff --git a/src/components/ScopeSelector.tsx b/src/components/ScopeSelector.tsx
+new file mode 100644
+index 0000000..01b8460
+--- /dev/null
++++ b/src/components/ScopeSelector.tsx
+@@ -0,0 +1,29 @@
++// DSH-3 scope selector — wireframe structure/classes; options are the runs
++// discovered from GET /api/runs (passed in), never hardcoded (AC 3).
++import { ALL } from '../data/metrics';
++
++interface Props {
++  runs: string[];
++  value: string;
++  onChange: (run: string) => void;
++}
++
++export default function ScopeSelector({ runs, value, onChange }: Props) {
++  return (
++    <div className="dash-card">
++      <h2 className="dash-title">Scope</h2>
++      <div className="dash-filters" role="group" aria-label="Select run scope">
++        {[ALL, ...runs].map((run) => (
++          <button
++            key={run}
++            className="dash-filter"
++            aria-pressed={value === run}
++            onClick={() => onChange(run)}
++          >
++            {run}
++          </button>
++        ))}
++      </div>
++    </div>
++  );
++}
+diff --git a/src/data/format.ts b/src/data/format.ts
+index f9255c1..edb5ee1 100644
+--- a/src/data/format.ts
++++ b/src/data/format.ts
+@@ -10,3 +10,11 @@ export function fmt(value: number | null | undefined): string {
+   if (Number.isInteger(value)) return String(value);
+   return value.toFixed(2);
+ }
++
++// DSH-3 AC 2: cost is tokens-only until a price table exists — a recorded
++// 0 is "unknown", not a free run (wall_s zero, by contrast, IS real).
++export function costDisplay(costUsd: number | null | undefined): string {
++  if (costUsd === null || costUsd === undefined || costUsd === 0) return 'not recorded';
++  if (!Number.isFinite(costUsd)) return 'not recorded';
++  return costUsd.toFixed(2);
++}
+diff --git a/src/hooks/useDashboardData.test.ts b/src/hooks/useDashboardData.test.ts
+new file mode 100644
+index 0000000..9a6b7d1
+--- /dev/null
++++ b/src/hooks/useDashboardData.test.ts
+@@ -0,0 +1,67 @@
++// DSH-3 data hook — loads runs, every run's ledger and findings via DSH-2's
++// fetch functions; per-source errors are collected, never thrown (AC 3/5).
++import { renderHook, waitFor } from '@testing-library/react';
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { useDashboardData } from './useDashboardData';
++import { controlRun, factoryRun, findings } from '../data/fixtures';
++
++function routeFetch(overrides: Record<string, unknown> = {}) {
++  const table: Record<string, unknown> = {
++    '/api/runs': ['demo-run', 'control-run'],
++    '/api/ledger?run=demo-run': factoryRun.rows,
++    '/api/ledger?run=control-run': controlRun.rows,
++    '/api/findings': findings,
++    ...overrides,
++  };
++  return vi.fn(async (url: string) => new Response(
++    JSON.stringify(table[url] ?? { error: url + ': no such source' }),
++    { status: 200, headers: { 'Content-Type': 'application/json' } },
++  ));
++}
++
++afterEach(() => {
++  vi.unstubAllGlobals();
++});
++
++describe('useDashboardData', () => {
++  it('loads runs, all ledgers and findings', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    const { result } = renderHook(() => useDashboardData());
++    await waitFor(() => expect(result.current.loading).toBe(false));
++    expect(result.current.runs).toEqual(['demo-run', 'control-run']);
++    expect(result.current.ledgers).toEqual([factoryRun, controlRun]);
++    expect(result.current.findings).toEqual(findings);
++    expect(result.current.errors).toEqual([]);
++  });
++
++  it('keeps other sources when one ledger fails, and reports file + reason', async () => {
++    vi.stubGlobal('fetch', routeFetch({
++      '/api/ledger?run=demo-run': { error: 'runs/demo-run/ledger.jsonl: invalid JSON at line 3' },
++    }));
++    const { result } = renderHook(() => useDashboardData());
++    await waitFor(() => expect(result.current.loading).toBe(false));
++    expect(result.current.errors).toEqual(['runs/demo-run/ledger.jsonl: invalid JSON at line 3']);
++    expect(result.current.ledgers).toEqual([controlRun]);
++    expect(result.current.findings).toEqual(findings);
++  });
++
++  it('sets findings to null on a findings source error (never fabricates)', async () => {
++    vi.stubGlobal('fetch', routeFetch({
++      '/api/findings': { error: 'state/findings.jsonl: permission denied' },
++    }));
++    const { result } = renderHook(() => useDashboardData());
++    await waitFor(() => expect(result.current.loading).toBe(false));
++    expect(result.current.findings).toBeNull();
++    expect(result.current.errors).toEqual(['state/findings.jsonl: permission denied']);
++    expect(result.current.ledgers).toEqual([factoryRun, controlRun]);
++  });
++
++  it('surfaces a runs-list error with no fabricated runs', async () => {
++    vi.stubGlobal('fetch', routeFetch({ '/api/runs': { error: 'runs: unreadable' } }));
++    const { result } = renderHook(() => useDashboardData());
++    await waitFor(() => expect(result.current.loading).toBe(false));
++    expect(result.current.runs).toEqual([]);
++    expect(result.current.ledgers).toEqual([]);
++    expect(result.current.errors).toEqual(['runs: unreadable']);
++  });
++});
+diff --git a/src/hooks/useDashboardData.ts b/src/hooks/useDashboardData.ts
+new file mode 100644
+index 0000000..feb9951
+--- /dev/null
++++ b/src/hooks/useDashboardData.ts
+@@ -0,0 +1,51 @@
++// DSH-3 data hook — orchestrates DSH-2's fetch functions (no reimplementation):
++// discover runs, load every run's ledger + findings. Per-source errors are
++// collected as typed strings; a failed source never crashes the others.
++import { useEffect, useState } from 'react';
++import { fetchFindings, fetchLedger, fetchRuns } from '../data/api';
++import type { FindingRow, RunLedger } from '../data/types';
++
++export interface DashboardData {
++  loading: boolean;
++  runs: string[];
++  ledgers: RunLedger[];
++  /** null when the findings source failed — escaped defects are unknown. */
++  findings: FindingRow[] | null;
++  errors: string[];
++}
++
++export function useDashboardData(): DashboardData {
++  const [data, setData] = useState<DashboardData>({
++    loading: true, runs: [], ledgers: [], findings: null, errors: [],
++  });
++  useEffect(() => {
++    let cancelled = false;
++    (async () => {
++      const runsRes = await fetchRuns();
++      if (cancelled) return;
++      if ('error' in runsRes) {
++        setData({ loading: false, runs: [], ledgers: [], findings: null, errors: [runsRes.error] });
++        return;
++      }
++      const runs = runsRes.rows;
++      const [findingsRes, ...ledgerRes] = await Promise.all([
++        fetchFindings(),
++        ...runs.map((run) => fetchLedger(run)),
++      ]);
++      if (cancelled) return;
++      const errors: string[] = [];
++      const ledgers: RunLedger[] = [];
++      runs.forEach((run, i) => {
++        const res = ledgerRes[i];
++        if ('error' in res) errors.push(res.error);
++        else ledgers.push({ run, rows: res.rows });
++      });
++      let findings: FindingRow[] | null = null;
++      if ('error' in findingsRes) errors.push(findingsRes.error);
++      else findings = findingsRes.rows;
++      setData({ loading: false, runs, ledgers, findings, errors });
++    })();
++    return () => { cancelled = true; };
++  }, []);
++  return data;
++}
+diff --git a/src/index.css b/src/index.css
+new file mode 100644
+index 0000000..515d4a1
+--- /dev/null
++++ b/src/index.css
+@@ -0,0 +1,39 @@
++/* DSH-3 — warm-paper theme from the approved wireframe (templates/
++   dash-wireframes/src/dash.css), only the rules this slice renders.
++   Literal hex + rule-level dark overrides; contrast-audited AA both themes. */
++:root {
++  --paper: #f7f1e5;
++  --surface: #fffefb;
++  --ink: #2b2118;
++  --ink-soft: #5c5040;
++  --accent: #b23e02;
++  --accent-ink: #fff8f0;
++  --rule: #d8cbb2;
++}
++@media (prefers-color-scheme: dark) {
++  :root {
++    --paper: #191410;
++    --surface: #2a221b;
++    --ink: #f0e7d8;
++    --ink-soft: #b3a68f;
++    --accent: #ff9254;
++    --accent-ink: #1a0e04;
++    --rule: #4a3f30;
++  }
++}
++body { background: var(--paper); color: var(--ink); font-family: system-ui, sans-serif; margin: 0; }
++.dash-card { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 20px; max-width: 760px; margin: 16px auto; }
++.dash-title { font-size: 1.3rem; margin: 0 0 4px; }
++.dash-sub { color: var(--ink-soft); margin: 0 0 14px; font-size: 0.88rem; }
++.dash-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
++.dash-stat { border: 1px solid var(--rule); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
++.dash-stat-label { color: var(--ink-soft); font-size: 0.78rem; }
++.dash-stat-value { font-size: 1.25rem; font-weight: 700; }
++.dash-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
++.dash-filter { padding: 6px 14px; border: 1px solid var(--rule); border-radius: 999px; background: var(--surface); color: var(--ink); cursor: pointer; font: inherit; }
++.dash-filter[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
++.dash-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
++.dash-empty { color: var(--ink-soft); padding: 20px 0; text-align: center; }
++.dash-error { border: 1px solid var(--accent); border-radius: 8px; padding: 14px; background: var(--surface); }
++.dash-error strong { color: var(--accent); }
++.dash-error p { margin: 6px 0 0; font-size: 0.85rem; color: var(--ink); }
