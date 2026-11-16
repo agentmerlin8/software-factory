@@ -33,7 +33,10 @@ MAX_FILES = 6
 MAX_UNREQUESTED_LINES = 60   # work with no AC behind it
 
 _VISUAL = re.compile(r"\.(css|scss|sass|less|styl)$", re.I)
-_TEST = re.compile(r"(\.test\.|\.spec\.|__tests__|(^|/)tests?/)", re.I)
+# Test files: JS/TS .test./.spec., __tests__/ or tests/ dirs, AND Python
+# test_*.py / *_test.py unittest convention (DSH-1: test_server.py was
+# miscounted as product, false-failing the size budget).
+_TEST = re.compile(r"(\.test\.|\.spec\.|__tests__|(^|/)tests?/|(^|/)test_[^/]*\.py$|_test\.py$)", re.I)
 
 
 @dataclass

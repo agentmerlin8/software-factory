@@ -87,3 +87,12 @@ def test_real_tod1_is_over_budget():
     assert not b.passed, "TOD-1 (934 lines, 522 CSS) must exceed the budget"
     assert b.visual > 400
     assert "visual/CSS" in b.named_failures()
+
+def test_python_unittest_files_count_as_tests():
+    # DSH-1 gate fix: test_server.py / *_test.py are tests, not product.
+    from factory.pr_size import DiffStat
+    assert DiffStat("test_server.py", 200, 0).is_test
+    assert DiffStat("tests/test_foo.py", 50, 0).is_test
+    assert DiffStat("foo_test.py", 50, 0).is_test
+    assert not DiffStat("server.py", 200, 0).is_test
+    assert not DiffStat("testing.py", 50, 0).is_test  # not a test_ prefix file
