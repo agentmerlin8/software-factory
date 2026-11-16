@@ -4,19 +4,20 @@
 1. One row per story in the selected scope: story id, arm/run, coder tokens,
    non-coder tokens, overhead ratio, wall time, human-min, escaped defects,
    review rounds, model(s). Data from DSH-2's harvestStories (reuse, no
-   reimplementation).
+   reimplementation). Matches the approved wireframe (StoryTable): warm-paper
+   theme, light + dark, contrast AA, semantic <table> with <th scope>.
 2. Sortable by rounds, escaped defects, and wall time (three sort columns;
    other columns static in v1, per the approved PRD). Clicking a sort header
-   toggles ascending/descending; the active sort is indicated (aria-sort).
+   toggles ascending/descending; the active sort is indicated (aria-sort);
+   sortable headers are real buttons with :focus-visible rings.
 3. Nulls render 'not recorded', never 0 (fmt helper). A recorded zero renders
    0. Cost is NOT a table column (cost is a headline card only).
 4. The table reacts to scope changes (rows = stories in scope). Empty scope
    shows a friendly empty state, not a blank table.
-5. Matches the approved wireframe (templates/dash-wireframes StoryTable):
-   warm-paper theme, light + dark, contrast AA, semantic <table> with
-   <th scope>, sortable headers are real buttons with :focus-visible rings.
-6. Per-story escaped defects: attribute findings to the story's repo+pr
+5. Per-story escaped defects: attribute findings to the story's repo+pr
    (the findings join), null when findings source failed.
+6. Sorting is a pure function over StoryMetrics[], unit-tested; the component
+   renders from it (no inline sort logic in the JSX).
 
 ## Manifest (files you may touch)
 - src/components/StoryTable.tsx, src/components/StoryTable.test.tsx
