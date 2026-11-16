@@ -33,10 +33,11 @@ MAX_FILES = 6
 MAX_UNREQUESTED_LINES = 60   # work with no AC behind it
 
 _VISUAL = re.compile(r"\.(css|scss|sass|less|styl)$", re.I)
-# Test files: JS/TS .test./.spec., __tests__/ or tests/ dirs, AND Python
-# test_*.py / *_test.py unittest convention (DSH-1: test_server.py was
-# miscounted as product, false-failing the size budget).
-_TEST = re.compile(r"(\.test\.|\.spec\.|__tests__|(^|/)tests?/|(^|/)test_[^/]*\.py$|_test\.py$)", re.I)
+# Test files: JS/TS .test./.spec., __tests__/ or tests/ dirs, Python
+# test_*.py / *_test.py unittest convention, and fixture/test-data modules
+# (fixtures.ts, *.fixtures.ts, testdata.*) — DSH-1/DSH-2: these were
+# miscounted as product, false-failing the size budget.
+_TEST = re.compile(r"(\.test\.|\.spec\.|__tests__|(^|/)tests?/|(^|/)test_[^/]*\.py$|_test\.py$|(^|/)fixtures?\.[^/]*$|\.fixtures?\.[^/]*$|(^|/)testdata\.[^/]*$)", re.I)
 
 
 @dataclass
@@ -123,9 +124,13 @@ def check(stats: list[DiffStat], *,
             f"budget — visual surface is the highest-cost review surface")
         advice.append(
             "move theming/styling to its own story with its own ACs, or cut it")
-    if len(stats) > max_files:
+    # File budget counts PRODUCT files only — test/fixture files don't
+    # consume review surface (same principle as the line budget; DSH-2).
+    product_files = sum(1 for s in stats if not s.is_test)
+    if product_files > max_files:
         failures.append(
-            f"{len(stats)} files exceeds the {max_files}-file budget")
+            f"{product_files} product files exceeds the {max_files}-file budget "
+            f"(test/fixture files counted separately)")
         advice.append("narrow the manifest; unrelated files belong in another slice")
 
     return SizeBudget(passed=not failures, total=total, visual=visual,

@@ -96,3 +96,27 @@ def test_python_unittest_files_count_as_tests():
     assert DiffStat("foo_test.py", 50, 0).is_test
     assert not DiffStat("server.py", 200, 0).is_test
     assert not DiffStat("testing.py", 50, 0).is_test  # not a test_ prefix file
+
+
+def test_fixture_modules_count_as_tests():
+    # DSH-2: fixtures.ts / *.fixtures.ts / testdata.* are test support.
+    from factory.pr_size import DiffStat
+    assert DiffStat("src/data/fixtures.ts", 100, 0).is_test
+    assert DiffStat("src/foo.fixtures.ts", 50, 0).is_test
+    assert DiffStat("testdata.json", 50, 0).is_test
+    assert not DiffStat("src/data/metrics.ts", 100, 0).is_test
+
+
+def test_file_budget_counts_product_only():
+    # DSH-2: 4 product + 3 test files = under the 6-file product budget.
+    from factory.pr_size import check, DiffStat
+    stats = [DiffStat(f"src/p{i}.ts", 30, 0) for i in range(4)]
+    stats += [DiffStat("src/a.test.ts", 100, 0), DiffStat("src/b.test.ts", 100, 0),
+              DiffStat("src/data/fixtures.ts", 100, 0)]
+    b = check(stats)
+    assert b.passed, b.named_failures()
+    # 7 product files still fails
+    stats2 = [DiffStat(f"src/p{i}.ts", 30, 0) for i in range(7)]
+    b2 = check(stats2)
+    assert not b2.passed
+    assert "product files" in b2.named_failures()
