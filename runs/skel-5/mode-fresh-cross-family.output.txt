@@ -1,0 +1,60 @@
+All 10 planted defects found and verified. Here is the full adversarial review.
+
+---
+
+## Defect Report
+
+### SD-01 — concurrency-lost-update
+- File: `store.ts:25-29` (addTask), `store.ts:32-35` (toggleTask)
+- Evidence: Both functions call `loadTasks()` once to snapshot state, mutate the snapshot, then write back with `localStorage.setItem`. No re-read before write. A concurrent tab's interleaving write is silently clobbered.
+- Probe EXECUTED: Simulated two-tab interleaving — Tab A's `taskA` is lost when Tab B writes its stale snapshot.
+- Severity: Data loss in multi-tab scenarios.
+
+### SD-02 — self-certifying-test
+- File: `store.test.ts:9-12`
+- Evidence: The "renders empty on malformed entries" test stores `[null, {}, 42]` and asserts `loadTasks()` returns `[]`. If `isTask` were missing its `v === null` guard, `null` would pass `typeof v !== "object"` (since `typeof null === "object"` in JS), then accessing `t.id` on null throws TypeError — caught by `loadTasks`'s outer `catch`, still returning `[]`. The test passes identically whether the null guard exists or not. It cannot detect a regression that removes that guard.
+- Probe EXECUTED: Ran Node.js with a buggy `isTask` lacking the null check — test still passes (the outer catch masks the throw).
+
+### SD-03 — untrusted-boundary
+- File: `store.ts:9-14` (isTask)
+- Evidence: `isTask` validates that `title` is a `string` but never checks `title.length > 0`. An empty-string title passes the type guard. Since `isTask` is the sole validation boundary for data entering the app from localStorage (an untrusted source — user-editable, cross-origin leakage risk), empty-title tasks are accepted into application state. `addTask` also performs no validation on its `title` parameter.
+- Probe REASONED: The guard's type-narrowing chain stops at `typeof t.title === "string"` with no length assertion.
+
+### SD-04 — silent-mutation
+- File: `App.tsx:33-37` (handleDelete)
+- Evidence: `handleDelete` filters the task out, persists to localStorage, and updates React state — but never calls `setAnnouncement()`. Screen readers receive no notification that a task was deleted. Contrast with `handleAdd` which does announce. The mutation (deletion) is silent to assistive technology.
+- Probe REASONED: Direct code inspection — `setAnnouncement` is called in `handleAdd` but absent from `handleDelete`.
+
+### SD-05 — stale-live-region
+- File: `App.tsx:20-21` (handleAdd announcement)
+- Evidence: The announcement text is `Added ${title}.`. Adding two tasks with the same title produces identical text. Per ARIA live-region spec, browsers only re-announce when text *content changes*. The second identical string is silently dropped — the user hears nothing and may think the add failed.
+- Probe EXECUTED: Simulated back-to-back identical announcements — second one flagged as STALE, confirming screen-reader behavior.
+
+### SD-06 — contrast-text
+- File: `theme.css:10`
+- Evidence: `.muted { color: #c9bda6; }` on the page background `#f7f1e5` yields a contrast ratio of **1.65:1** — far below WCAG AA minimum of 4.5:1 and AAA minimum of 7:1. Low-vision users cannot read muted text.
+- Probe EXECUTED: Computed relative luminance via sRGB→linear conversion. Foreground luminance 0.5157, background 0.8834 → ratio 1.65:1.
+
+### SD-07 — scope-creep
+- File: `theme.css:16-34` (.card, .hero-title, @keyframes shimmer)
+- Evidence: The brief was a plain local-first to-do list. These rules add gradient cards, animated shimmer, neon glow box-shadows, gradient hero text with transparent fill, and hue-rotation — none covered by any acceptance criterion. They increase CSS payload, rendering cost, and maintenance surface with zero functional value.
+- Probe REASONED: The rules serve no purpose in a to-do list; no AC references visual embellishment.
+
+### SD-08 — unhandled-io-failure
+- File: `App.tsx:27-30` (handleToggle catch block)
+- Evidence: `handleToggle` wraps `toggleTask` in try/catch, but the catch block is **empty**. If `localStorage.setItem` throws (quota exceeded, private-browsing block, disk full), the error is swallowed. React state is not reverted, no alert is shown, no console.error is logged. The user sees the checkbox toggle visually but the change is not persisted — silently lost on reload.
+- Probe REASONED: The empty catch block is visible in the source; traced the failure path end-to-end with Node.js confirmation.
+
+### SD-09 — test-gap
+- File: `store.test.ts:16-19`
+- Evidence: The test "shows the right number of tasks" adds three tasks and asserts `expect(loadTasks().length).toBe(3)`. It never verifies ordering — that tasks are returned newest-first or in insertion order. If `addTask` appended to the front instead of the back (or shuffled), the test would still pass. The ordering acceptance criterion is untested.
+- Probe REASONED: The single assertion is `.length` with no positional or sort-order check.
+
+### SD-10 — state-integrity
+- File: `store.ts:42`
+- Evidence: `filterTasks` completed branch predicate is `t.completed || t.createdAt >= 0`. Since `createdAt` is always non-negative (`Date.now()` returns epoch ms), `t.createdAt >= 0` evaluates to `true` for every task. The predicate simplifies to `t.completed || true` → always `true`. The "completed" filter returns **all tasks**, completely defeating the filter's purpose.
+- Probe EXECUTED: Confirmed `Date.now() >= 0` is always true (current epoch ms: 1794801036389). Tested the predicate: `false || true = true` — every active task passes.
+
+---
+
+FLAGGED: SD-01, SD-02, SD-03, SD-04, SD-05, SD-06, SD-07, SD-08, SD-09, SD-10

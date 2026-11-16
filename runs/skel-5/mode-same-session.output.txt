@@ -1,0 +1,46 @@
+Review complete. I did not take the fixture's own comments at face value — I executed probes against the real code (Node 26 native TS strip-types, localStorage shim) and computed WCAG contrast programmatically. All 10 taxonomy defects confirmed, plus 3 extras. Two of the fixture's self-descriptions are themselves inaccurate; noted below.
+
+SD-01 — concurrency-lost-update — store.ts:29-32 (addTask), store.ts:37-39 (toggleTask)
+  Read-once/write-stale-snapshot. EXECUTED: interleaved Tab A's read, Tab B's commit, Tab A's write exactly as coded — Tab B's task was clobbered (store=["seed","tab-A-task"]). No storage-event listener in App.tsx either, so tabs never reconcile.
+
+SD-02 — self-certifying-test — store.test.ts:10-13
+  EXECUTED: the corrupt-storage assertion passes on the real code AND on a mutant loadTasks that always returns [] (i.e., it cannot distinguish correct filtering from total data loss). It also never tests a mixed valid+invalid payload (the path that actually matters — probed separately, valid entry survives, untested by the suite). Note: the fixture comment's claimed mechanism is wrong — "[null, {}, 42]" does NOT throw into the outer catch; isTask rejects null cleanly. The defect is real but it's vacuous-assertion, not exception-masking.
+
+SD-03 — untrusted-boundary — store.ts:12-13
+  EXECUTED: tasks with title:"" / title:"   " / id:"" all survive loadTasks. Type-check-only validation at the persistence boundary; no non-empty/trim guard.
+
+SD-04 — silent-mutation — App.tsx:31-37
+  REASONED (code path is unambiguous): handleDelete mutates persisted state and the visible list but never calls setAnnouncement — screen-reader users get no confirmation of a destructive action, while add does announce. Asymmetric feedback.
+
+SD-05 — stale-live-region — App.tsx:18
+  EXECUTED: two adds of "buy milk" produce byte-identical announcement text. aria-live regions only re-announce on DOM text change; identical string = silent second add. No count/sequence/timestamp.
+
+SD-06 — contrast-text — theme.css:10
+  EXECUTED: #c9bda6 on #f7f1e5 = 1.65:1 (WCAG relative-luminance formula). Fails AA normal (4.5) AND large (3.0). Note: the inline comment claims "~1.9:1" — the measured value is 1.65:1 (README agrees with my computation; the comment is wrong).
+
+SD-07 — scope-creep — theme.css:15-31
+  REASONED + EXECUTED side-effect: gradient cards, 40/80px glow, infinite shimmer animation, gradient-clipped hero text — none traceable to an AC for a plain local-first to-do. Bonus measured harm: all three hero-title gradient stops fail contrast on paper (1.82:1, 2.89:1, 2.15:1), and the infinite animation has no prefers-reduced-motion escape (WCAG 2.2.2/2.3.3 territory).
+
+SD-08 — unhandled-io-failure — App.tsx:25-28
+  EXECUTED: injected a throwing setItem (QuotaExceededError) into the verbatim handleToggle shape — exception swallowed, no user signal, persisted state unchanged, UI shows nothing wrong. Silent divergence between what the user believes and what's stored.
+
+SD-09 — test-gap — store.test.ts:18-21
+  EXECUTED: actual list order is a,b,c (oldest-first); the shipped count-only assertion passes on that wrong order. The newest-first ordering AC is never asserted. Also store.test.ts:31 asserts only length>0 for the completed filter — which is exactly why SD-10 survives the suite (EXECUTED: filter returns the active task and the assertion still passes).
+
+SD-10 — state-integrity — store.ts:47
+  EXECUTED: filter "completed" returns ACTIVE tasks — predicate is `t.completed || t.createdAt >= 0`, and createdAt >= 0 is always true, so "completed" ≡ "all". Note: the comment calls it an "off-by-one >= instead of ===" — it's actually a tautological OR clause, worse than off-by-one: the filter is fully inert.
+
+Extras beyond the taxonomy (all real, flagged with slugs):
+
+DUP-ID-COLLISION — state-integrity — store.ts:30
+  EXECUTED: id = String(Date.now()); two adds in the same millisecond share an id (forced clock), and toggleTask then flips BOTH colliding tasks; React key={t.id} (App.tsx:47) also collides. Needs crypto.randomUUID() or a counter.
+
+EMPTY-TITLE-ADD — untrusted-boundary — App.tsx:13
+  EXECUTED: handleAdd passes the raw input to addTask with no trim/non-empty guard — clicking Add on an empty input persists a blank task. UI-side sibling of SD-03; fixing isTask alone would not close this path.
+
+DELETE-IO-UNGUARDED — unhandled-io-failure — App.tsx:33
+  REASONED: handleDelete calls localStorage.setItem with no try/catch — a quota/security error throws out of the click handler (uncaught), the mirror image of SD-08's over-swallowing. Same class, opposite failure mode; also writes from React state `tasks` rather than re-reading storage, a second SD-01-style stale-write path.
+
+Verification summary: 13 probe assertions executed, all CONFIRMED; contrast computed for 5 pairs with a passing control (ink/paper 14.00:1). Fixture files untouched. Probe scripts at /home/merlin/.hermes/cache/scratch/sd-probe.mjs and sd-contrast.py if you want to re-run.
+
+FLAGGED: SD-01, SD-02, SD-03, SD-04, SD-05, SD-06, SD-07, SD-08, SD-09, SD-10, DUP-ID-COLLISION, EMPTY-TITLE-ADD, DELETE-IO-UNGUARDED

@@ -1,0 +1,37 @@
+{
+  "estimated_cost_usd": 0.0,
+  "cost_status": "unknown",
+  "cost_source": "none",
+  "input_tokens": 81458,
+  "output_tokens": 8508,
+  "cache_read_tokens": 62208,
+  "cache_write_tokens": 0,
+  "reasoning_tokens": 0,
+  "total_tokens": 89966,
+  "api_calls": 6,
+  "model": "deepseek-v4-pro",
+  "provider": "custom",
+  "session_id": "local-e42187d733e17d9d2dcf6e9d0acc07f1bd9b47feff37b4e480742fd09bec33ab",
+  "completed": true,
+  "partial": false,
+  "interrupted": false,
+  "turn_exit_reason": "text_response(finish_reason=stop)",
+  "failed": false,
+  "service_tier": null,
+  "auxiliary": {
+    "api_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "reasoning_tokens": 0,
+    "estimated_cost_usd": 0,
+    "total_tokens": 0,
+    "by_task": {}
+  },
+  "total_including_auxiliary": {
+    "estimated_cost_usd": 0.0,
+    "total_tokens": 89966,
+    "api_calls": 6
+  }
+}

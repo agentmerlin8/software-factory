@@ -1,0 +1,36 @@
+Adversarial review complete. All 10 planted defects found — 8 verified by executed probes against the actual fixture code (Node 26 native TS + localStorage stub), 2 by code reasoning. Probes live in /home/merlin/.hermes/cache/scratch/sd-probe/.
+
+SD-01 — concurrency-lost-update — store.ts:29-32 (and :37-39)
+addTask/toggleTask read once, then write a snapshot with no re-read or merge at the write boundary. EXECUTED: injected a second-tab commit between tab A's read and write; storage ended [seed, TAB-A] — TAB-B's task was clobbered.
+
+SD-02 — self-certifying-test — store.test.ts:11-12
+The payload "[null, {}, 42]" is crafted so a guard-less implementation throws on null into loadTasks' outer catch and still returns []. EXECUTED: ran the fixture assertion against both the real impl and a mutant with no per-entry guard — both pass. The test cannot distinguish correct from defective code.
+
+SD-03 — untrusted-boundary — store.ts:12-13, App.tsx:13
+isTask checks only typeof title === "string": empty titles and negative createdAt pass validation. EXECUTED: loadTasks kept {"title":"","createdAt":-5}; addTask("") also persists an empty title (handleAdd passes raw input, no trim/length check).
+
+SD-04 — silent-mutation — App.tsx:31-37
+handleDelete mutates the list and storage but never calls setAnnouncement — screen-reader users get no feedback for a destructive action (add announces, delete doesn't). REASONED (absence of setAnnouncement in the handler; contrast with handleAdd:18).
+
+SD-05 — stale-live-region — App.tsx:18,44
+Announcement is `Added ${title}.` with no count/sequence. EXECUTED: two adds of "milk" produce byte-identical region text; an aria-live region only announces on text change, so the second add is silent.
+
+SD-06 — contrast-text — theme.css:10
+EXECUTED (WCAG relative-luminance computation): #c9bda6 on #f7f1e5 = 1.65:1, far below AA 4.5:1 (fixture comment claims ~1.9:1 — actual is worse). Bonus: .hero-title gradient stops on paper measure 1.82 / 2.89 / 2.15:1 — all fail too (theme.css:26-29).
+
+SD-07 — scope-creep — theme.css:15-31
+Gradient cards, 40/80px glow shadows, infinite shimmer animation, gradient-clipped hero text — none backed by an AC for a plain local-first to-do list; the shimmer also runs unbounded with no prefers-reduced-motion guard. REASONED.
+
+SD-08 — unhandled-io-failure — App.tsx:25-28, and sibling at :33
+EXECUTED: with setItem throwing QuotaExceededError, handleToggle's empty catch swallows it — no alert, no revert, persisted state unchanged while UI implies success. Same-class sibling: handleDelete has NO try/catch, so the identical write failure escapes uncaught (crash). Fix the class, not just the toggle site.
+
+SD-09 — test-gap — store.test.ts:19-20
+Asserts length === 3 but never ordering. EXECUTED: actual load order is [a,b,c] — oldest-first, violating the newest-first AC — and the count assertion passes even on a fully reversed list. The filter test (:31) is likewise weak (toBeGreaterThan(0)), which is where SD-10 hides.
+
+SD-10 — state-integrity — store.ts:47
+Completed predicate is `t.completed || t.createdAt >= 0` — createdAt >= 0 is true for every real task, so the completed view returns everything. EXECUTED: filterTasks([done, active], "completed") returned both, including the active task.
+
+BONUS — duplicate-id-collision (state-integrity class) — store.ts:30, App.tsx:47
+id = String(Date.now()) collides for two adds in the same millisecond. EXECUTED with frozen clock: both tasks got id 1700000000000, one toggleTask flipped BOTH, and React key={t.id} duplicates. Not in the taxonomy but a real defect.
+
+FLAGGED: SD-01, SD-02, SD-03, SD-04, SD-05, SD-06, SD-07, SD-08, SD-09, SD-10
