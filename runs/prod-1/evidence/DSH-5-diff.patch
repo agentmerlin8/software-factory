@@ -1,0 +1,546 @@
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+index 0b01d1e..2d6dc20 100644
+--- a/src/App.test.tsx
++++ b/src/App.test.tsx
+@@ -168,10 +168,63 @@ describe('App per-story table (DSH-4)', () => {
+     }));
+     render(<App />);
+     await loaded();
+-    const row = screen.getByText('STY-A').closest('tr')!;
++    const row = within(screen.getByRole('table')).getByText('STY-A').closest('tr')!;
+     const cells = within(row).getAllByRole('cell').map((c) => c.textContent);
+     expect(cells[6]).toBe('not recorded'); // escaped unknown, never 0
+     expect(cells[5]).toBe('9');            // rounds fall back to loop_converged
+     expect(cells[2]).toBe('150');          // tokens still render from ledger
+   });
+ });
++
++describe('App trends (DSH-5)', () => {
++  function barTitles(label: string): string[] {
++    const chart = screen.getByRole('img', { name: label });
++    return Array.from(chart.querySelectorAll('.dash-bar')).map((b) => b.getAttribute('title') ?? '');
++  }
++
++  it('renders trends below the table with all three charts', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    expect(screen.getByRole('heading', { name: /trends/i })).toBeInTheDocument();
++    expect(barTitles('Review rounds per story')).toEqual(['STY-A: 3 rounds', 'STY-B: 4 rounds', 'STY-C: not recorded']);
++    expect(barTitles('Escaped defects per story')).toHaveLength(4); // all arms
++    const mix = screen.getByRole('img', { name: 'Model mix (tokens)' });
++    expect(within(mix).getByText('coder-model')).toBeInTheDocument();
++    expect(within(mix).getByText('review-model')).toBeInTheDocument();
++  });
++
++  it('scope change updates all three charts to the selected run only', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    fireEvent.click(screen.getByRole('button', { name: 'control-run' }));
++    expect(screen.getByText(/no factory-arm stories/i)).toBeInTheDocument();
++    expect(barTitles('Escaped defects per story')).toEqual(['CTL-1 (control): not recorded']);
++    const mix = screen.getByRole('img', { name: 'Model mix (tokens)' });
++    expect(within(mix).queryByText('review-model')).not.toBeInTheDocument();
++    expect(within(mix).getByText('1.0k')).toBeInTheDocument(); // coder-model 1000 tokens
++    fireEvent.click(screen.getByRole('button', { name: 'demo-run' }));
++    expect(barTitles('Review rounds per story')).toHaveLength(3);
++  });
++
++  it('empty scope shows the empty state, not blank charts', async () => {
++    vi.stubGlobal('fetch', routeFetch());
++    render(<App />);
++    await loaded();
++    fireEvent.click(screen.getByRole('button', { name: 'empty-run' }));
++    expect(screen.queryByRole('img')).not.toBeInTheDocument();
++    expect(screen.getByText(/no story data in this scope/i)).toBeInTheDocument();
++  });
++
++  it('findings source failed -> escaped bars not recorded, rounds + mix live', async () => {
++    vi.stubGlobal('fetch', routeFetch({
++      '/api/findings': { error: 'state/findings.jsonl: permission denied' },
++    }));
++    render(<App />);
++    await loaded();
++    const titles = barTitles('Escaped defects per story');
++    expect(titles.every((t) => t.includes('not recorded'))).toBe(true);
++    expect(barTitles('Review rounds per story')[0]).toBe('STY-A: 9 rounds'); // loop_converged fallback
++  });
++});
+diff --git a/src/App.tsx b/src/App.tsx
+index fe50d79..86a2a2a 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -7,6 +7,7 @@ import './index.css';
+ import HeadlineCards from './components/HeadlineCards';
+ import ScopeSelector from './components/ScopeSelector';
+ import StoryTable from './components/StoryTable';
++import Trends from './components/Trends';
+ import { useDashboardData } from './hooks/useDashboardData';
+ import { ALL, escapedDefectsByRepo, harvestStories, selectRuns } from './data/metrics';
+ 
+@@ -90,6 +91,7 @@ export default function App() {
+             sub={scope === ALL ? 'All runs' : scope}
+           />
+           <StoryTable stories={stories} />
++          <Trends stories={stories} runs={selectRuns(ledgers, scope)} />
+         </>
+       )}
+     </div>
+diff --git a/src/components/Trends.test.tsx b/src/components/Trends.test.tsx
+new file mode 100644
+index 0000000..a406a7e
+--- /dev/null
++++ b/src/components/Trends.test.tsx
+@@ -0,0 +1,225 @@
++// DSH-5 trends — three bar charts wired to DSH-2 harvestStories (reuse).
++// Aggregation is pure unit-tested functions (AC 6); the component renders
++// from them with no inline math. Nulls -> 'not recorded' / 0-height, never a
++// fabricated 0 (AC 1-4); max-normalized with a max=0 guard (no NaN).
++import { describe, expect, it } from 'vitest';
++import { render, screen, within } from '@testing-library/react';
++import Trends, { compactTokens } from './Trends';
++import { barPct, escapedBars, harvestStories, roundsBars, tokensByModel } from '../data/metrics';
++import { allRuns, controlRun, factoryRun, findings } from '../data/fixtures';
++import type { LedgerRow, RunLedger, StoryMetrics } from '../data/types';
++
++const stories = harvestStories(allRuns, findings);
++
++function story(partial: Partial<StoryMetrics>): StoryMetrics {
++  return {
++    story: 'STY-X', run: 'r', arm: 'factory', repo: 'x/y',
++    coderTokens: 0, noncoderTokens: 0, overheadRatio: null,
++    wallS: null, humanMin: null, costUsd: null,
++    dispatches: 0, inLoopDefects: 0, tokensRecorded: false,
++    coderTokensRecorded: false, noncoderTokensRecorded: false,
++    rounds: null, ...partial,
++  };
++}
++
++function ledger(partial: Partial<LedgerRow> & Pick<LedgerRow, 'event'>): LedgerRow {
++  return { schema: 0, story: null, role: null, repo: null, model: null, tokens: null, detail: {}, ...partial };
++}
++
++// --- AC 6: pure aggregation helpers -----------------------------------------
++describe('barPct (pure normalization)', () => {
++  it('max-normalizes to a percentage', () => {
++    expect(barPct(4, 4)).toBe(100);
++    expect(barPct(2, 4)).toBe(50);
++    expect(barPct(0, 4)).toBe(0);
++  });
++  it('guards max=0 and null — never NaN / divide-by-zero', () => {
++    expect(barPct(5, 0)).toBe(0);
++    expect(barPct(null, 0)).toBe(0);
++    expect(barPct(null, 10)).toBe(0);
++    expect(Number.isNaN(barPct(3, 0))).toBe(false);
++  });
++});
++
++describe('roundsBars (pure)', () => {
++  it('includes factory-arm stories only, max-normalized heights', () => {
++    const bars = roundsBars(stories);
++    expect(bars.map((b) => b.label)).toEqual(['STY-A', 'STY-B', 'STY-C']); // CTL-1 excluded
++    const byLabel = Object.fromEntries(bars.map((b) => [b.label, b]));
++    expect(byLabel['STY-A'].value).toBe(3);
++    expect(byLabel['STY-B'].value).toBe(4);
++    expect(byLabel['STY-B'].pct).toBe(100); // max
++    expect(byLabel['STY-A'].pct).toBe(75);  // 3/4
++    expect(byLabel['STY-A'].title).toBe('STY-A: 3 rounds');
++  });
++  it('null rounds -> 0-height bar + not-recorded title, never 0 rounds', () => {
++    const bars = roundsBars(stories);
++    const c = bars.find((b) => b.label === 'STY-C')!;
++    expect(c.value).toBeNull();
++    expect(c.pct).toBe(0);
++    expect(c.title).toBe('STY-C: not recorded');
++  });
++  it('all-null rounds (max=0) -> every bar 0, no NaN', () => {
++    const bars = roundsBars([story({ story: 'A', rounds: null }), story({ story: 'B', rounds: null })]);
++    expect(bars.every((b) => b.pct === 0)).toBe(true);
++    expect(bars.every((b) => !Number.isNaN(b.pct))).toBe(true);
++  });
++});
++
++describe('escapedBars (pure)', () => {
++  it('includes all arms; control label distinguished; min divisor 1', () => {
++    const bars = escapedBars(stories);
++    expect(bars.map((b) => b.label)).toEqual(['STY-A', 'STY-B', 'STY-C', 'ctl CTL-1']);
++    const a = bars.find((b) => b.label === 'STY-A')!;
++    expect(a.value).toBe(2);
++    expect(a.pct).toBe(100); // max 2
++    expect(a.title).toBe('STY-A (factory): 2 escaped');
++    const b = bars.find((b) => b.label === 'STY-B')!;
++    expect(b.value).toBe(0); // a joined PR with zero escapes is a real 0
++    expect(b.pct).toBe(0);
++  });
++  it('null escaped -> 0-height + not-recorded title (never fabricated)', () => {
++    const bars = escapedBars(stories);
++    for (const label of ['STY-C', 'ctl CTL-1']) {
++      const bar = bars.find((b) => b.label === label)!;
++      expect(bar.value).toBeNull();
++      expect(bar.pct).toBe(0);
++      expect(bar.title).toContain('not recorded');
++    }
++  });
++  it('all-null escaped (max floor 1) -> 0-height, no NaN', () => {
++    const bars = escapedBars([story({ story: 'A', escapedDefects: null })]);
++    expect(bars[0].pct).toBe(0);
++    expect(Number.isNaN(bars[0].pct)).toBe(false);
++  });
++});
++
++describe('tokensByModel (pure)', () => {
++  it('groups dispatch tokens by model across the scope, max-normalized widths', () => {
++    const mix = tokensByModel(allRuns);
++    expect(mix.map((m) => m.model)).toEqual(['coder-model', 'review-model']); // desc by tokens
++    const coder = mix.find((m) => m.model === 'coder-model')!;
++    const review = mix.find((m) => m.model === 'review-model')!;
++    expect(coder.tokens).toBe(1165); // 150 + 15 + 1000
++    expect(review.tokens).toBe(175); // 75 + 100
++    expect(coder.pct).toBe(100);
++    expect(review.pct).toBeCloseTo((175 / 1165) * 100, 5);
++  });
++  it('excludes models with no recorded usage; a recorded zero IS usage', () => {
++    const runs: RunLedger[] = [{
++      run: 'r', rows: [
++        ledger({ event: 'dispatch_completed', story: 'S', model: 'ghost', tokens: null }),
++        ledger({ event: 'dispatch_completed', story: 'S', model: 'ghost', tokens: {} }),
++        ledger({ event: 'dispatch_completed', story: 'S', model: 'zero', tokens: { in: 0, out: 0 } }),
++        ledger({ event: 'dispatch_completed', story: 'S', model: 'real', tokens: { in: 10, out: 5 } }),
++      ],
++    }];
++    const mix = tokensByModel(runs);
++    expect(mix.map((m) => m.model)).toEqual(['real', 'zero']); // ghost excluded
++    expect(mix.find((m) => m.model === 'zero')!.tokens).toBe(0);
++  });
++  it('sums correction tokens grouped by row.model (only hasUsage rows)', () => {
++    const runs: RunLedger[] = [{
++      run: 'r', rows: [
++        ledger({ event: 'dispatch_completed', story: 'S', model: 'm', tokens: { in: 10, out: 0 } }),
++        ledger({ event: 'correction', story: 'S', role: 'coder', model: 'm', detail: { tokens: { in: 5, out: 5 } } }),
++        ledger({ event: 'correction', story: 'S', role: 'coder', model: 'm', detail: { tokens: null } }),
++        ledger({ event: 'correction', story: 'S', role: 'coder', detail: { tokens: { in: 99, out: 99 } } }), // no model -> unattributed
++      ],
++    }];
++    expect(tokensByModel(runs)).toEqual([{ model: 'm', tokens: 20, pct: 100 }]);
++  });
++  it('widths are sane: finite, within [0,100], max model = 100', () => {
++    const mix = tokensByModel(allRuns);
++    expect(mix.every((m) => Number.isFinite(m.pct) && m.pct >= 0 && m.pct <= 100)).toBe(true);
++    expect(Math.max(...mix.map((m) => m.pct))).toBe(100);
++  });
++  it('no recorded usage -> empty list (max=0 guard, no NaN)', () => {
++    expect(tokensByModel([{ run: 'r', rows: [ledger({ event: 'dispatch_completed', model: 'g', tokens: null })] }])).toEqual([]);
++    expect(tokensByModel([])).toEqual([]);
++  });
++});
++
++describe('compactTokens (pure formatting)', () => {
++  it('formats large totals compactly, small totals exactly', () => {
++    expect(compactTokens(7_760_000)).toBe('7.76M');
++    expect(compactTokens(1165)).toBe('1.2k');
++    expect(compactTokens(175)).toBe('175');
++    expect(compactTokens(0)).toBe('0');
++  });
++  it('non-finite -> not recorded', () => {
++    expect(compactTokens(NaN)).toBe('not recorded');
++  });
++});
++
++// --- AC 1-5: component renders from the pure functions ----------------------
++function barsIn(label: string): HTMLElement[] {
++  const chart = screen.getByRole('img', { name: label });
++  return Array.from(chart.querySelectorAll('.dash-bar'));
++}
++
++describe('Trends component', () => {
++  it('renders rounds bars factory-arm only with proportional heights + titles', () => {
++    render(<Trends stories={stories} runs={allRuns} />);
++    const bars = barsIn('Review rounds per story');
++    expect(bars).toHaveLength(3);
++    const a = bars.find((b) => b.getAttribute('title') === 'STY-A: 3 rounds')!;
++    const b = bars.find((b) => b.getAttribute('title') === 'STY-B: 4 rounds')!;
++    expect(a.style.height).toBe('75%');
++    expect(b.style.height).toBe('100%');
++    expect(screen.queryByTitle(/CTL-1.*rounds/)).not.toBeInTheDocument();
++  });
++
++  it('renders escaped bars for all arms; null -> 0-height + not-recorded title', () => {
++    render(<Trends stories={stories} runs={allRuns} />);
++    const bars = barsIn('Escaped defects per story');
++    expect(bars).toHaveLength(4);
++    const nullBar = bars.find((b) => (b.getAttribute('title') ?? '').includes('STY-C'))!;
++    expect(nullBar.style.height).toBe('0%');
++    expect(nullBar.getAttribute('title')).toContain('not recorded');
++    expect(nullBar.className).toContain('dash-bar--null');
++    // control label distinguishes the arm
++    expect(screen.getByText('ctl CTL-1')).toBeInTheDocument();
++    // distinct defect bar color class
++    expect(bars.every((b) => b.className.includes('dash-bar--defect'))).toBe(true);
++  });
++
++  it('renders model-mix rows with proportional widths + formatted totals', () => {
++    render(<Trends stories={stories} runs={allRuns} />);
++    const mix = screen.getByRole('img', { name: 'Model mix (tokens)' });
++    const rows = within(mix).getAllByText(/coder-model|review-model/);
++    expect(rows).toHaveLength(2);
++    const coderBar = mix.querySelector('.dash-mix-bar') as HTMLElement;
++    expect(coderBar.style.width).toBe('100%');
++    expect(within(mix).getByText('1.2k')).toBeInTheDocument();
++    expect(within(mix).getByText('175')).toBeInTheDocument();
++  });
++
++  it('empty scope -> friendly empty state, not blank charts', () => {
++    render(<Trends stories={[]} runs={[]} />);
++    expect(screen.getByText(/no story data in this scope/i)).toBeInTheDocument();
++    expect(screen.queryByRole('img')).not.toBeInTheDocument();
++  });
++
++  it('control-only scope -> rounds section empty note, escaped + mix still render', () => {
++    const ctl = harvestStories([controlRun], findings);
++    render(<Trends stories={ctl} runs={[controlRun]} />);
++    expect(screen.getByText(/no factory-arm stories/i)).toBeInTheDocument();
++    expect(screen.getByRole('img', { name: 'Escaped defects per story' })).toBeInTheDocument();
++  });
++
++  it('no recorded model usage -> mix empty note, not a blank axis', () => {
++    const noUsage = harvestStories([{ run: 'r', rows: [ledger({ event: 'dispatch_completed', story: 'S', model: 'g', tokens: null })] }], findings);
++    render(<Trends stories={noUsage} runs={[{ run: 'r', rows: [ledger({ event: 'dispatch_completed', story: 'S', model: 'g', tokens: null })] }]} />);
++    expect(screen.getByText(/no recorded model usage/i)).toBeInTheDocument();
++  });
++
++  it('max=0 across charts renders 0-height bars, never NaN in styles', () => {
++    const zero = [story({ story: 'A', rounds: null, escapedDefects: null })];
++    render(<Trends stories={zero} runs={[]} />);
++    for (const bar of [...barsIn('Review rounds per story'), ...barsIn('Escaped defects per story')]) {
++      expect(bar.style.height).toBe('0%');
++      expect(bar.style.height).not.toContain('NaN');
++    }
++  });
++});
+diff --git a/src/components/Trends.tsx b/src/components/Trends.tsx
+new file mode 100644
+index 0000000..565d8e4
+--- /dev/null
++++ b/src/components/Trends.tsx
+@@ -0,0 +1,91 @@
++// DSH-5 trends — wireframe Trends structure/classes wired to DSH-2's
++// harvestStories output (reuse, no reimplementation). Aggregation lives in
++// the pure metrics helpers (AC 6); this component only renders them.
++// Nulls -> 'not recorded' titles / 0-height bars, never a fabricated 0.
++import { escapedBars, roundsBars, tokensByModel } from '../data/metrics';
++import type { ModelMix, TrendBar } from '../data/metrics';
++import type { RunLedger, StoryMetrics } from '../data/types';
++
++/** Compact token totals for the mix rows (wireframe shows 7.76M / 3.32M).
++ * Pure formatting; non-finite -> 'not recorded' (defense-in-depth). */
++export function compactTokens(n: number): string {
++  if (!Number.isFinite(n)) return 'not recorded';
++  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
++  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
++  return String(n);
++}
++
++function BarChart({ bars, label, defect }: { bars: TrendBar[]; label: string; defect?: boolean }) {
++  return (
++    <div className="dash-bars" role="img" aria-label={label}>
++      {bars.map((b) => (
++        <div key={b.label} className="dash-bar-col">
++          <div
++            className={
++              'dash-bar'
++              + (defect ? ' dash-bar--defect' : '')
++              + (b.value == null ? ' dash-bar--null' : '')
++            }
++            style={{ height: `${b.pct}%` }}
++            title={b.title}
++          />
++          <span className="dash-bar-label">{b.label}</span>
++        </div>
++      ))}
++    </div>
++  );
++}
++
++function MixChart({ mix }: { mix: ModelMix[] }) {
++  return (
++    <div className="dash-mix" role="img" aria-label="Model mix (tokens)">
++      {mix.map((m, i) => (
++        <div key={m.model} className="dash-mix-row">
++          <span>{m.model}</span>
++          <span
++            className={'dash-mix-bar' + (i % 2 === 1 ? ' dash-mix-bar--alt' : '')}
++            style={{ width: `${m.pct}%` }}
++            title={`${m.model}: ${m.tokens.toLocaleString()} tokens`}
++          />
++          <span>{compactTokens(m.tokens)}</span>
++        </div>
++      ))}
++    </div>
++  );
++}
++
++interface Props {
++  stories: StoryMetrics[];
++  /** Scoped run ledgers — the model-mix source (tokens grouped by row.model). */
++  runs: RunLedger[];
++}
++
++export default function Trends({ stories, runs }: Props) {
++  if (stories.length === 0) {
++    return (
++      <div className="dash-card">
++        <h2 className="dash-title">Trends</h2>
++        <p className="dash-empty">No story data in this scope yet.</p>
++      </div>
++    );
++  }
++  const rounds = roundsBars(stories);
++  const escaped = escapedBars(stories);
++  const mix = tokensByModel(runs);
++  return (
++    <div className="dash-card">
++      <h2 className="dash-title">Trends</h2>
++      <p className="dash-sub">Review rounds per story (factory arm)</p>
++      {rounds.length === 0
++        ? <p className="dash-empty">No factory-arm stories in this scope.</p>
++        : <BarChart bars={rounds} label="Review rounds per story" />}
++      <p className="dash-sub">Escaped defects per story (all arms)</p>
++      <BarChart bars={escaped} label="Escaped defects per story" defect />
++      <p className="dash-sub">Model mix (tokens)</p>
++      {mix.length === 0
++        ? <p className="dash-empty">No recorded model usage in this scope.</p>
++        : <MixChart mix={mix} />}
++      <p className="dash-note">Cycle-time trend deferred to v2 (wall time is in the table).</p>
++    </div>
++  );
++}
+diff --git a/src/data/metrics.ts b/src/data/metrics.ts
+index 727edb6..0dd815e 100644
+--- a/src/data/metrics.ts
++++ b/src/data/metrics.ts
+@@ -213,6 +213,83 @@ export function headlineOverhead(stories: StoryMetrics[]): number | null {
+   return coder === 0 ? null : noncoder / coder;
+ }
+ 
++// --- trends aggregation (DSH-5, pure — component renders from these) --------
++
++/** Max-normalized percentage with a max=0/null guard: never NaN or
++ * divide-by-zero. Null values render as 0-height (not-recorded) bars. */
++export function barPct(value: number | null, max: number): number {
++  if (value == null || max <= 0) return 0;
++  return (value / max) * 100;
++}
++
++export interface TrendBar {
++  label: string;
++  value: number | null;
++  pct: number;
++  title: string;
++}
++
++/** AC 1: one bar per FACTORY-arm story, height max-normalized over recorded
++ * rounds. Null rounds stay null -> 0-height + 'not recorded' title. */
++export function roundsBars(stories: StoryMetrics[]): TrendBar[] {
++  const factory = stories.filter((s) => s.arm === 'factory');
++  const max = Math.max(0, ...factory.map((s) => s.rounds ?? 0));
++  return factory.map((s) => ({
++    label: s.story,
++    value: s.rounds,
++    pct: barPct(s.rounds, max),
++    title: s.rounds == null ? `${s.story}: not recorded` : `${s.story}: ${s.rounds} rounds`,
++  }));
++}
++
++/** AC 2: one bar per story (ALL arms), max-normalized with min divisor 1.
++ * Control labels are distinguished; null escaped -> 0-height + title. */
++export function escapedBars(stories: StoryMetrics[]): TrendBar[] {
++  const max = Math.max(1, ...stories.map((s) => s.escapedDefects ?? 0));
++  return stories.map((s) => {
++    const escaped = s.escapedDefects ?? null;
++    const label = s.arm === 'control' ? `ctl ${s.story}` : s.story;
++    return {
++      label,
++      value: escaped,
++      pct: barPct(escaped, max),
++      title: escaped == null
++        ? `${s.story} (${s.arm}): not recorded`
++        : `${s.story} (${s.arm}): ${escaped} escaped`,
++    };
++  });
++}
++
++export interface ModelMix {
++  model: string;
++  tokens: number;
++  pct: number;
++}
++
++/** AC 3: tokens aggregated by model across the scope (coder + non-coder),
++ * from dispatch_completed + correction rows, ONLY rows with recorded usage
++ * and a model name. Sorted desc by tokens; widths max-normalized (the top
++ * model is 100%, so widths stay within [0,100]). A recorded zero is usage
++ * and stays; a no-usage model is excluded, never shown as 0. */
++export function tokensByModel(runs: RunLedger[]): ModelMix[] {
++  const totals = new Map<string, number>();
++  for (const runLedger of runs) {
++    for (const row of runLedger.rows) {
++      if (!row.model) continue;
++      const tokens = row.event === 'dispatch_completed'
++        ? row.tokens
++        : row.event === 'correction'
++          ? (row.detail?.tokens as LedgerTokens | null | undefined)
++          : null;
++      if (!hasUsage(tokens)) continue;
++      totals.set(row.model, (totals.get(row.model) ?? 0) + tokenTotal(tokens));
++    }
++  }
++  const entries = [...totals.entries()].sort((a, b) => b[1] - a[1]);
++  const max = Math.max(0, ...entries.map(([, n]) => n));
++  return entries.map(([model, tokens]) => ({ model, tokens, pct: barPct(tokens, max) }));
++}
++
+ /** Mean over FACTORY-arm stories with recorded rounds (control excluded:
+  * single-pass, not reviewable). Null when none recorded — never 0. */
+ export function meanReviewRounds(stories: StoryMetrics[]): number | null {
+diff --git a/src/index.css b/src/index.css
+index 3a331b7..9d38964 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -9,6 +9,8 @@
+   --accent: #b23e02;
+   --accent-ink: #fff8f0;
+   --rule: #d8cbb2;
++  --bar: #b23e02;
++  --bar-alt: #1a7f4e;
+ }
+ @media (prefers-color-scheme: dark) {
+   :root {
+@@ -19,6 +21,8 @@
+     --accent: #ff9254;
+     --accent-ink: #1a0e04;
+     --rule: #4a3f30;
++    --bar: #ff9254;
++    --bar-alt: #4ade80;
+   }
+ }
+ body { background: var(--paper); color: var(--ink); font-family: system-ui, sans-serif; margin: 0; }
+@@ -45,3 +49,18 @@ body { background: var(--paper); color: var(--ink); font-family: system-ui, sans
+ .dash-sort { background: none; border: none; color: var(--accent); cursor: pointer; font: inherit; font-weight: 600; padding: 0; }
+ .dash-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+ .dash-model { color: var(--ink-soft); font-size: 0.75rem; }
++/* DSH-5 — trends bars/mix from the approved wireframe (dash.css). Bar colors
++   contrast-audited AA against --surface both themes (5.81/4.97 light,
++   7.07/8.97 dark). Null bars are transparent: 0-height, title carries the
++   'not recorded' state — never a fabricated visible count. */
++.dash-bars { display: flex; align-items: flex-end; gap: 14px; height: 140px; padding: 8px 0; }
++.dash-bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; flex: 1; }
++.dash-bar { width: 100%; max-width: 48px; background: var(--bar); border-radius: 4px 4px 0 0; min-height: 4px; }
++.dash-bar--defect { background: var(--bar-alt); }
++.dash-bar--null { min-height: 0; background: transparent; }
++.dash-bar-label { color: var(--ink-soft); font-size: 0.75rem; margin-top: 4px; }
++.dash-mix { display: flex; flex-direction: column; gap: 8px; }
++.dash-mix-row { display: grid; grid-template-columns: 160px 1fr 60px; align-items: center; gap: 8px; font-size: 0.82rem; }
++.dash-mix-bar { height: 12px; background: var(--bar); border-radius: 6px; }
++.dash-mix-bar--alt { background: var(--bar-alt); }
++.dash-note { color: var(--ink-soft); font-size: 0.75rem; margin: 10px 0 0; font-style: italic; }
